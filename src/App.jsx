@@ -338,7 +338,7 @@ function PulseApp({ session }) {
           />
         )}
 
-        {activeTab === "discover" && <DiscoverView articles={articles} onSearchTag={(tag) => { setSearchQuery(tag); setSearchOpen(true); setActiveTab("feed"); }} />}
+        {activeTab === "discover" && <DiscoverView />}
 
         {activeTab === "saved" && (
           <SavedView
@@ -461,8 +461,10 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
         position: "sticky",
         top: 0,
         zIndex: 100,
-background: "#000",
-        borderTop: "1px solid #222",
+        background: "var(--bg-glass)",
+        backdropFilter: "blur(24px) saturate(1.8)",
+        WebkitBackdropFilter: "blur(24px) saturate(1.8)",
+        borderBottom: "1px solid var(--border)",
       }}
     >
       {/* Top Row */}
@@ -492,8 +494,8 @@ background: "#000",
                   gap: "4px",
                   padding: "2px 7px",
                   borderRadius: "6px",
-                  background: "rgba(0,229,160,0.12)",
-border: "1px solid rgba(0,229,160,0.2)",
+                  background: "var(--accent-muted)",
+                  border: "1px solid rgba(0,229,160,0.15)",
                 }}
               >
                 <div
@@ -505,12 +507,12 @@ border: "1px solid rgba(0,229,160,0.2)",
                     animation: "liveDot 2s ease infinite",
                   }}
                 />
-                <span style={{ fontSize: "9px", fontWeight: 800, color: "#00e5a0", letterSpacing: "1px" }}>
+                <span style={{ fontSize: "9px", fontWeight: 800, color: "var(--accent)", letterSpacing: "1px" }}>
                   LIVE
                 </span>
               </div>
             </div>
-            <div style={{ fontSize: "9px", fontWeight: 700, color: "#666", letterSpacing: "2px", marginTop: "-1px" }}>
+            <div style={{ fontSize: "9px", fontWeight: 700, color: "var(--text-muted)", letterSpacing: "2px", marginTop: "-1px" }}>
               TALENT INTELLIGENCE COLLECTIVE
             </div>
           </div>
@@ -523,7 +525,7 @@ border: "1px solid rgba(0,229,160,0.2)",
             style={{
               background: searchOpen ? "var(--accent-muted)" : "none",
               border: "none",
-              color: searchOpen ? "#00e5a0" : "#888",
+              color: searchOpen ? "var(--accent)" : "var(--text-muted)",
               padding: "8px",
               borderRadius: "12px",
               display: "flex",
@@ -538,7 +540,7 @@ border: "1px solid rgba(0,229,160,0.2)",
             style={{
               background: "none",
               border: "none",
-              color: "#888",
+              color: "var(--text-muted)",
               padding: "8px",
               borderRadius: "12px",
               position: "relative",
@@ -556,7 +558,7 @@ border: "1px solid rgba(0,229,160,0.2)",
                 height: "7px",
                 borderRadius: "50%",
                 background: "var(--red)",
-                border: "2px solid #000",
+                border: "2px solid var(--bg)",
               }}
             />
           </button>
@@ -717,9 +719,9 @@ border: "1px solid rgba(0,229,160,0.2)",
                 fontSize: "11px",
                 fontWeight: 700,
                 letterSpacing: "0.3px",
-               border: isActive ? `1px solid ${typeof color === "string" && color.startsWith("#") ? color + "40" : "rgba(0,229,160,0.25)"}` : "1px solid #333",
-                background: isActive ? (typeof color === "string" && color.startsWith("#") ? color + "12" : "rgba(0,229,160,0.12)") : "#111",
-                color: isActive ? color : "#aaa",
+                border: isActive ? `1px solid ${typeof color === "string" && color.startsWith("#") ? color + "40" : "var(--accent-border)"}` : "1px solid var(--border)",
+                background: isActive ? (typeof color === "string" && color.startsWith("#") ? color + "12" : "var(--accent-muted)") : "var(--bg-card)",
+                color: isActive ? color : "var(--text-muted)",
                 transition: "all 0.25s ease",
               }}
             >
@@ -915,102 +917,148 @@ function SkeletonCards() {
 //  DISCOVER VIEW
 // ═══════════════════════════════════════════════
 
-function DiscoverView({ articles, onSearchTag }) {
-  // Count articles per category from live data
-  const categoryCounts = {};
-  for (const a of articles) {
-    if (a.category) {
-      categoryCounts[a.category] = (categoryCounts[a.category] || 0) + 1;
+function DiscoverView() {
+  const [substackArticles, setSubstackArticles] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const res = await fetch("/.netlify/functions/fetch-substack");
+        const data = await res.json();
+        if (!cancelled && data.ok) {
+          setSubstackArticles(data.articles || []);
+        } else if (!cancelled) {
+          setError("Couldn't load TIC content");
+        }
+      } catch {
+        if (!cancelled) setError("Couldn't connect to TIC feed");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     }
-  }
+    load();
+    return () => { cancelled = true; };
+  }, []);
+
+  const formatDate = (iso) => {
+    if (!iso) return "";
+    return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  };
 
   return (
     <div style={{ padding: "24px 16px 120px", animation: "fadeSlide 0.3s ease" }}>
-      <h2 style={{ fontSize: "24px", fontWeight: 700, color: "#fff", margin: "0 0 6px", fontFamily: "var(--font-display)" }}>
-        Discover
-      </h2>
-      <p style={{ fontSize: "13px", color: "var(--text-muted)", margin: "0 0 24px" }}>
-        Curated collections and trending topics
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "4px" }}>
+        <img src="/tic-head.png" alt="" style={{ width: "24px", height: "24px", objectFit: "contain" }} />
+        <h2 style={{ fontSize: "24px", fontWeight: 700, color: "#fff", margin: 0, fontFamily: "Georgia, serif" }}>
+          TIC Digest
+        </h2>
+      </div>
+      <p style={{ fontSize: "13px", color: "#888", margin: "0 0 24px" }}>
+        Articles and insights from the Talent Intelligence Collective
       </p>
 
-      {/* Trending */}
-      <div style={{ marginBottom: "28px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "14px" }}>
-          <TrendingIcon />
-          <span style={{ fontSize: "12px", fontWeight: 800, color: "var(--accent)", letterSpacing: "1.5px", textTransform: "uppercase" }}>
-            Trending Now
-          </span>
+      {/* Loading */}
+      {loading && (
+        <div style={{ padding: "40px 0", textAlign: "center" }}>
+          <div style={{
+            width: "6px", height: "6px", borderRadius: "50%", background: "#00e5a0",
+            margin: "0 auto", animation: "liveDot 1.5s ease infinite",
+          }} />
+          <p style={{ fontSize: "13px", color: "#666", marginTop: "12px" }}>Loading TIC content...</p>
         </div>
-        {TRENDING_TAGS.map((t, i) => (
-          <div
-            key={t.tag}
-            onClick={() => onSearchTag(t.tag.slice(1))}
-            role="button"
-            tabIndex={0}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              padding: "14px 16px",
-              marginBottom: "8px",
-              background: "var(--bg-card)",
-              borderRadius: "var(--radius-md)",
-              border: "1px solid var(--border)",
-              cursor: "pointer",
-              transition: "all 0.2s",
-              animation: `cardIn 0.4s ease ${i * 0.05}s both`,
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = "var(--bg-card-hover)";
-              e.currentTarget.style.borderColor = "var(--border-hover)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "var(--bg-card)";
-              e.currentTarget.style.borderColor = "var(--border)";
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-              <span style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-faint)", width: "20px" }}>{i + 1}</span>
-              <div>
-                <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)" }}>{t.tag}</div>
-                <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>{t.count} posts</div>
-              </div>
-            </div>
-            <TrendingIcon size={16} />
-          </div>
-        ))}
-      </div>
+      )}
 
-      {/* Collections by Category */}
-      <div>
-        <span style={{ fontSize: "12px", fontWeight: 800, color: "var(--text-secondary)", letterSpacing: "1.5px", textTransform: "uppercase" }}>
-          By Category
-        </span>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginTop: "14px" }}>
-          {Object.entries(CAT_COLORS).map(([cat, color], i) => (
-            <div
-              key={cat}
-              onClick={() => onSearchTag(cat)}
-              role="button"
-              tabIndex={0}
-              style={{
-                padding: "20px 16px",
-                borderRadius: "16px",
-                background: `${color}08`,
-                border: `1px solid ${color}15`,
-                cursor: "pointer",
-                transition: "all 0.2s",
-                animation: `cardIn 0.4s ease ${(i + 5) * 0.05}s both`,
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.borderColor = `${color}30`)}
-              onMouseLeave={(e) => (e.currentTarget.style.borderColor = `${color}15`)}
-            >
-              <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-primary)", marginBottom: "4px" }}>{cat}</div>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>{categoryCounts[cat] || 0} articles</div>
-            </div>
-          ))}
+      {/* Error */}
+      {error && (
+        <div style={{
+          padding: "20px", borderRadius: "14px", background: "#111", border: "1px solid #333",
+          textAlign: "center",
+        }}>
+          <p style={{ fontSize: "13px", color: "#888", margin: 0 }}>{error}</p>
+          <a href="https://talentintelligencecollective.substack.com" target="_blank" rel="noopener noreferrer"
+            style={{ fontSize: "12px", color: "#00e5a0", marginTop: "8px", display: "inline-block" }}>
+            Visit TIC Substack directly →
+          </a>
         </div>
-      </div>
+      )}
+
+      {/* Articles */}
+      {!loading && !error && substackArticles.map((article, i) => (
+        <a
+          key={article.url}
+          href={article.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            display: "block", textDecoration: "none", marginBottom: "16px",
+            background: "#0a0a0a", borderRadius: "16px", border: "1px solid #1a1a1a",
+            overflow: "hidden", transition: "border-color 0.2s",
+            animation: `cardIn 0.4s ease ${i * 0.05}s both`,
+          }}
+          onMouseEnter={(e) => e.currentTarget.style.borderColor = "#333"}
+          onMouseLeave={(e) => e.currentTarget.style.borderColor = "#1a1a1a"}
+        >
+          {/* Cover image */}
+          {article.image && (
+            <div style={{
+              width: "100%", height: "180px",
+              backgroundImage: `url(${article.image})`,
+              backgroundSize: "cover", backgroundPosition: "center",
+              backgroundColor: "#111",
+            }} />
+          )}
+          {/* Content */}
+          <div style={{ padding: "16px 18px 18px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
+              <span style={{
+                fontSize: "10px", fontWeight: 700, color: "#00e5a0",
+                letterSpacing: "1.5px", textTransform: "uppercase",
+              }}>TIC Digest</span>
+              {article.publishedAt && (
+                <>
+                  <span style={{ color: "#333" }}>·</span>
+                  <span style={{ fontSize: "11px", color: "#666" }}>{formatDate(article.publishedAt)}</span>
+                </>
+              )}
+            </div>
+            <h3 style={{
+              fontSize: "17px", fontWeight: 700, color: "#eee", margin: "0 0 8px",
+              lineHeight: 1.3, fontFamily: "Georgia, serif",
+            }}>{article.title}</h3>
+            {article.description && (
+              <p style={{
+                fontSize: "13px", lineHeight: 1.6, color: "#888", margin: 0,
+                overflow: "hidden", textOverflow: "ellipsis",
+                display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical",
+              }}>{article.description}</p>
+            )}
+            <div style={{
+              marginTop: "12px", fontSize: "12px", fontWeight: 600, color: "#00e5a0",
+            }}>Read on Substack →</div>
+          </div>
+        </a>
+      ))}
+
+      {/* Footer link */}
+      {!loading && !error && (
+        <div style={{ textAlign: "center", padding: "16px 0" }}>
+          <a href="https://talentintelligencecollective.substack.com" target="_blank" rel="noopener noreferrer"
+            style={{
+              fontSize: "13px", color: "#888", textDecoration: "none",
+              padding: "10px 20px", borderRadius: "12px", border: "1px solid #333",
+              display: "inline-block", transition: "all 0.2s",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = "#00e5a0"; e.currentTarget.style.borderColor = "#00e5a0"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = "#888"; e.currentTarget.style.borderColor = "#333"; }}
+          >
+            Subscribe to TIC on Substack
+          </a>
+        </div>
+      )}
     </div>
   );
 }
@@ -1112,8 +1160,9 @@ function BottomNav({ activeTab, onTabChange }) {
         maxWidth: "480px",
         zIndex: 100,
         background: "var(--bg-glass)",
-background: "#000",
-        borderBottom: "1px solid #222",
+        backdropFilter: "blur(24px) saturate(1.8)",
+        WebkitBackdropFilter: "blur(24px) saturate(1.8)",
+        borderTop: "1px solid var(--border)",
         display: "flex",
         justifyContent: "space-around",
         padding: "8px 0 env(safe-area-inset-bottom, 20px)",
@@ -1133,7 +1182,7 @@ background: "#000",
               flexDirection: "column",
               alignItems: "center",
               gap: "3px",
-              color: isActive ? "#00e5a0" : "#888",
+              color: isActive ? "var(--accent)" : "var(--text-faint)",
               transition: "color 0.2s",
               padding: "6px 12px",
               position: "relative",
