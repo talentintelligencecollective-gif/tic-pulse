@@ -33,15 +33,17 @@ export default function AuthPage({ onAuth }) {
           },
         });
 
-        if (signUpErr) throw signUpErr;
+   if (signUpErr) throw signUpErr;
 
-        // Update profile with company and job title
+        // Create profile with all details
         if (data.user) {
-          await supabase.from("profiles").update({
+          await supabase.from("profiles").upsert({
+            id: data.user.id,
+            email: data.user.email,
             full_name: fullName,
             company,
             job_title: jobTitle,
-          }).eq("id", data.user.id);
+          });
         }
 
         // Check if email confirmation is required
