@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { fetchArticles, incrementEngagement } from "./supabase.js";
+import { supabase, fetchArticles, incrementEngagement } from "./supabase.js";
+import AuthPage from "./AuthPage.jsx";
 import ArticleCard from "./ArticleCard.jsx";
 import ShareSheet from "./ShareSheet.jsx";
 import NewsletterBuilder from "./NewsletterBuilder.jsx";
@@ -50,10 +51,58 @@ function saveSet(key, set) {
 }
 
 // ═══════════════════════════════════════════════
-//  APP
+//  APP (auth wrapper)
 // ═══════════════════════════════════════════════
 
 export default function App() {
+  const [session, setSession] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  // Check for existing session on mount
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session: s } }) => {
+      setSession(s);
+      setAuthLoading(false);
+    });
+
+    // Listen for auth state changes (login, logout, token refresh)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (_event, s) => setSession(s)
+    );
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // Loading state while checking auth
+  if (authLoading) {
+    return (
+      <div style={{
+        minHeight: "100vh", background: "#000", display: "flex",
+        alignItems: "center", justifyContent: "center",
+      }}>
+        <div style={{
+          width: "6px", height: "6px", borderRadius: "50%",
+          background: "#00e5a0", animation: "liveDot 1.5s ease infinite",
+        }} />
+        <style>{`@keyframes liveDot { 0%,100% { opacity:1; } 50% { opacity:0.3; } }`}</style>
+      </div>
+    );
+  }
+
+  // Not logged in — show auth page
+  if (!session) {
+    return <AuthPage onAuth={(s) => setSession(s)} />;
+  }
+
+  // Logged in — show the feed
+  return <PulseApp session={session} />;
+}
+
+// ═══════════════════════════════════════════════
+//  PULSE APP (main feed, shown after login)
+// ═══════════════════════════════════════════════
+
+function PulseApp({ session }) {
   // ─── State ───
   const [articles, setArticles] = useState([]);  // Full unfiltered set
   const [loading, setLoading] = useState(true);
@@ -253,6 +302,8 @@ export default function App() {
         searchQuery={searchQuery}
         activeCategory={activeCategory}
         searchInputRef={searchInputRef}
+        user={session?.user}
+        onLogout={async () => { await supabase.auth.signOut(); }}
         onToggleSearch={() => {
           setSearchOpen(!searchOpen);
           if (searchOpen) setSearchQuery("");
@@ -401,7 +452,12 @@ export default function App() {
 //  HEADER
 // ═══════════════════════════════════════════════
 
-function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, onToggleSearch, onSearchChange, onCategoryChange }) {
+function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user, onLogout, onToggleSearch, onSearchChange, onCategoryChange }) {
+  const [showUserMenu, setShowUserMenu] = useState(false);
+  const userInitials = user?.user_metadata?.full_name
+    ? user.user_metadata.full_name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)
+    : (user?.email?.[0] || "?").toUpperCase();
+
   return (
     <header
       style={{
@@ -509,6 +565,83 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, onTog
               }}
             />
           </button>
+          {/* User avatar */}
+          <div style={{ position: "relative" }}>
+            <button
+              onClick={() => setShowUserMenu(!showUserMenu)}
+              aria-label="Account menu"
+              style={{
+                width: "32px",
+                height: "32px",
+                borderRadius: "50%",
+                background: "linear-gradient(135deg, #00e5a0, #00b4d8)",
+                border: "none",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: "11px",
+                fontWeight: 800,
+                color: "#000",
+                cursor: "pointer",
+                marginLeft: "2px",
+              }}
+            >
+              {userInitials}
+            </button>
+            {showUserMenu && (
+              <>
+                <div
+                  style={{ position: "fixed", inset: 0, zIndex: 200 }}
+                  onClick={() => setShowUserMenu(false)}
+                />
+                <div
+                  style={{
+                    position: "absolute",
+                    top: "40px",
+                    right: 0,
+                    background: "#1a1a1e",
+                    border: "1px solid var(--border-hover)",
+                    borderRadius: "14px",
+                    padding: "8px",
+                    minWidth: "180px",
+                    zIndex: 201,
+                    boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+                    animation: "fadeSlide 0.15s ease",
+                  }}
+                >
+                  <div style={{ padding: "10px 12px", borderBottom: "1px solid var(--border)" }}>
+                    <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-primary)" }}>
+                      {user?.user_metadata?.full_name || "User"}
+                    </div>
+                    <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>
+                      {user?.email}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => { setShowUserMenu(false); onLogout(); }}
+                    style={{
+                      width: "100%",
+                      padding: "10px 12px",
+                      background: "none",
+                      border: "none",
+                      borderRadius: "8px",
+                      color: "var(--red)",
+                      fontSize: "13px",
+                      fontWeight: 600,
+                      textAlign: "left",
+                      cursor: "pointer",
+                      marginTop: "4px",
+                      transition: "background 0.2s",
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = "rgba(255,59,92,0.08)"}
+                    onMouseLeave={(e) => e.currentTarget.style.background = "none"}
+                  >
+                    Log out
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
