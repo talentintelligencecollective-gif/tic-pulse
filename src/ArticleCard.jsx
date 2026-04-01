@@ -53,6 +53,20 @@ export default function ArticleCard({ article, index, user, onLike, onBookmark, 
   const [grad1, grad2] = CAT_GRADIENTS[article.category] || ["#111", "#1a1a1a"];
   const timeDisplay = formatRelativeTime(article.published_at || article.created_at);
 
+  // Load real comment count on mount
+  useEffect(() => {
+    async function loadCount() {
+      try {
+        const { count } = await supabase
+          .from("comments")
+          .select("id", { count: "exact", head: true })
+          .eq("article_id", article.id);
+        if (count !== null) setCommentCount(count);
+      } catch {}
+    }
+    loadCount();
+  }, [article.id]);
+
   // Load comments when expanded
   useEffect(() => {
     if (!showComments) return;
@@ -127,7 +141,8 @@ export default function ArticleCard({ article, index, user, onLike, onBookmark, 
           <div>
             <div style={{ fontSize: "13px", fontWeight: 600, color: "#eee", letterSpacing: "-0.2px" }}>{article.source_name || article.source_domain}</div>
             <div style={{ fontSize: "11px", color: "#888", marginTop: "1px", display: "flex", alignItems: "center", gap: "6px" }}>
-              <span>{timeDisplay}</span><span>·</span><span>{article.read_time_min || 4} min</span>
+              <span>{timeDisplay}</span>
+              {article.read_time_min ? (<><span>·</span><span>{article.read_time_min} min</span></>) : article.tldr ? (<><span>·</span><span>{Math.max(1, Math.ceil((article.tldr || "").split(/\s+/).length / 200))} min</span></>) : null}
               {article.gdelt_tone != null && (<><span>·</span><ToneIndicator value={article.gdelt_tone} /></>)}
             </div>
           </div>
