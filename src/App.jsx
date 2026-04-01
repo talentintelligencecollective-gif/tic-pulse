@@ -28,28 +28,6 @@ const CAT_COLORS = {
   "DEI": "#8b5cf6",
 };
 
-const STORAGE_KEY_LIKES = "tic-pulse-likes";
-const STORAGE_KEY_BOOKMARKS = "tic-pulse-bookmarks";
-
-// ─── Local storage helpers ───
-
-function loadSet(key) {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? new Set(JSON.parse(raw)) : new Set();
-  } catch {
-    return new Set();
-  }
-}
-
-function saveSet(key, set) {
-  try {
-    localStorage.setItem(key, JSON.stringify([...set]));
-  } catch {
-    // localStorage might be full or unavailable — degrade gracefully
-  }
-}
-
 // ─── Inline Icons for Watch / Listen tabs ───
 
 function WatchIcon({ size = 22 }) {
@@ -81,14 +59,12 @@ const relDate = (d) => {
   const dt = new Date(d);
   return `${dt.getDate()} ${["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][dt.getMonth()]}`;
 };
-
 const fmtViews = (n) => !n ? "0" : n >= 1e6 ? `${(n/1e6).toFixed(1)}M` : n >= 1e3 ? `${(n/1e3).toFixed(1)}K` : `${n}`;
-
 const videoTypeColor = (t) => t === "podcast" ? "#00e5a0" : t === "event" ? "#f59e0b" : t === "panel" ? "#a855f7" : t === "short" ? "#00b4d8" : "#888";
 const videoTypeLabel = (t) => ({ podcast: "Podcast", event: "Event", panel: "Panel", short: "Short", video: "Video" }[t] || "Video");
 
 // ═══════════════════════════════════════════════
-//  APP (auth wrapper) — UNCHANGED
+//  APP (auth wrapper)
 // ═══════════════════════════════════════════════
 
 export default function App() {
@@ -100,43 +76,31 @@ export default function App() {
       setSession(s);
       setAuthLoading(false);
     });
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (_event, s) => setSession(s)
-    );
-
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => setSession(s));
     return () => subscription.unsubscribe();
   }, []);
 
   if (authLoading) {
     return (
-      <div style={{
-        minHeight: "100vh", background: "#000", display: "flex",
-        alignItems: "center", justifyContent: "center",
-      }}>
-        <div style={{
-          width: "6px", height: "6px", borderRadius: "50%",
-          background: "#00e5a0", animation: "liveDot 1.5s ease infinite",
-        }} />
+      <div style={{ minHeight: "100vh", background: "#000", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#00e5a0", animation: "liveDot 1.5s ease infinite" }} />
         <style>{`@keyframes liveDot { 0%,100% { opacity:1; } 50% { opacity:0.3; } }`}</style>
       </div>
     );
   }
 
-  if (!session) {
-    return <AuthPage onAuth={(s) => setSession(s)} />;
-  }
-
+  if (!session) return <AuthPage onAuth={(s) => setSession(s)} />;
   return <PulseApp session={session} />;
 }
 
 // ═══════════════════════════════════════════════
-//  PULSE APP (main app, shown after login)
-//  v3: adds "watch" and "listen" tabs
+//  PULSE APP — Phase 2: server-side engagement
 // ═══════════════════════════════════════════════
 
 function PulseApp({ session }) {
-  // ─── State (existing) ───
+  const userId = session?.user?.id;
+
+  // ─── State ───
   const [articles, setArticles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -150,16 +114,48 @@ function PulseApp({ session }) {
   const [selectedIds, setSelectedIds] = useState([]);
   const [showNewsletter, setShowNewsletter] = useState(false);
 
-  const [likedIds, setLikedIds] = useState(() => loadSet(STORAGE_KEY_LIKES));
-  const [bookmarkedIds, setBookmarkedIds] = useState(() => loadSet(STORAGE_KEY_BOOKMARKS));
+  // Server-side engagement (replaces localStorage)
+  const [likedIds, setLikedIds] = useState(new Set());
+  const [bookmarkedIds, setBookmarkedIds] = useState(new Set());
+  const [engagementLoaded, setEngagementLoaded] = useState(false);
+
+  // Dynamic trending tags
+  const [trendingTags, setTrendingTags] = useState([]);
 
   const likedIdsRef = useRef(likedIds);
   useEffect(() => { likedIdsRef.current = likedIds; }, [likedIds]);
 
   const searchInputRef = useRef(null);
 
-  // ─── Data Loading (existing) ───
+  // ─── Load engagement from Supabase ───
+  useEffect(() => {
+    if (!userId) return;
+    async function loadEngagement() {
+      try {
+        const { data } = await supabase
+          .from("user_engagement")
+          .select("article_id, liked, bookmarked")
+          .eq("user_id", userId);
 
+        if (data) {
+          const liked = new Set();
+          const bookmarked = new Set();
+          for (const row of data) {
+            if (row.liked) liked.add(row.article_id);
+            if (row.bookmarked) bookmarked.add(row.article_id);
+          }
+          setLikedIds(liked);
+          setBookmarkedIds(bookmarked);
+        }
+      } catch (e) {
+        console.error("Failed to load engagement:", e);
+      }
+      setEngagementLoaded(true);
+    }
+    loadEngagement();
+  }, [userId]);
+
+  // ─── Data Loading ───
   const loadArticles = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -176,16 +172,48 @@ function PulseApp({ session }) {
 
   useEffect(() => { loadArticles(); }, [loadArticles]);
 
-  // ─── Client-side filtering (existing) ───
+  // ─── Dynamic trending tags (from last 48h of articles) ───
+  useEffect(() => {
+    if (articles.length === 0) return;
+    const cutoff = Date.now() - 48 * 60 * 60 * 1000;
+    const tagCounts = {};
 
+    for (const a of articles) {
+      const pubDate = new Date(a.published_at || a.created_at).getTime();
+      if (pubDate < cutoff) continue;
+      for (const tag of (a.tags || [])) {
+        const clean = tag.replace(/^#/, "");
+        if (clean.length > 2) {
+          tagCounts[clean] = (tagCounts[clean] || 0) + 1;
+        }
+      }
+    }
+
+    const sorted = Object.entries(tagCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([tag, count]) => ({ tag: `#${tag}`, count: String(count) }));
+
+    // Fallback if no tags found in recent articles
+    if (sorted.length === 0) {
+      setTrendingTags([
+        { tag: "#TalentIntelligence", count: "" },
+        { tag: "#AI", count: "" },
+        { tag: "#WorkforcePlanning", count: "" },
+        { tag: "#SkillsBased", count: "" },
+      ]);
+    } else {
+      setTrendingTags(sorted);
+    }
+  }, [articles]);
+
+  // ─── Client-side filtering (48h freshness) ───
   const filteredArticles = useMemo(() => {
-    const freshnessCutoff = Date.now() - 48 * 60 * 60 * 1000; // 48 hours
+    const freshnessCutoff = Date.now() - 48 * 60 * 60 * 1000;
     return articles
       .filter((a) => {
-        // Freshness gate: only show articles from last 48 hours
         const pubDate = new Date(a.published_at || a.created_at).getTime();
         if (pubDate < freshnessCutoff) return false;
-
         const matchesCategory = activeCategory === "All" || a.category === activeCategory;
         if (!matchesCategory) return false;
         if (searchQuery) {
@@ -206,48 +234,67 @@ function PulseApp({ session }) {
     if (searchOpen && searchInputRef.current) searchInputRef.current.focus();
   }, [searchOpen]);
 
-  // ─── Toast (existing) ───
+  // ─── Toast ───
   const showToast = useCallback((msg) => {
     setToast({ msg, show: true });
     setTimeout(() => setToast((t) => ({ ...t, show: false })), 2200);
   }, []);
 
-  // ─── Engagement Handlers (existing) ───
-
+  // ─── Server-side Like Handler ───
   const handleLike = useCallback((articleId) => {
+    const wasLiked = likedIdsRef.current.has(articleId);
+
+    // Optimistic UI
     setLikedIds((prev) => {
       const next = new Set(prev);
-      const wasLiked = next.has(articleId);
-      if (wasLiked) { next.delete(articleId); incrementEngagement(articleId, "like_count", -1); }
-      else { next.add(articleId); incrementEngagement(articleId, "like_count", 1); }
-      saveSet(STORAGE_KEY_LIKES, next);
+      wasLiked ? next.delete(articleId) : next.add(articleId);
       return next;
     });
-    const wasLiked = likedIdsRef.current.has(articleId);
     setArticles((prev) => prev.map((a) => {
       if (a.id !== articleId) return a;
-      return { ...a, like_count: a.like_count + (wasLiked ? -1 : 1) };
+      return { ...a, like_count: (a.like_count || 0) + (wasLiked ? -1 : 1) };
     }));
-  }, []);
 
+    // Persist to Supabase
+    incrementEngagement(articleId, "like_count", wasLiked ? -1 : 1);
+    supabase.from("user_engagement").upsert({
+      user_id: userId,
+      article_id: articleId,
+      liked: !wasLiked,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "user_id,article_id" }).then(({ error }) => {
+      if (error) console.error("Like sync error:", error);
+    });
+  }, [userId]);
+
+  // ─── Server-side Bookmark Handler ───
   const handleBookmark = useCallback((articleId) => {
+    const wasBookmarked = bookmarkedIds.has(articleId);
+
     setBookmarkedIds((prev) => {
       const next = new Set(prev);
-      const wasBookmarked = next.has(articleId);
-      if (wasBookmarked) { next.delete(articleId); }
-      else { next.add(articleId); showToast("Saved to bookmarks"); }
-      saveSet(STORAGE_KEY_BOOKMARKS, next);
+      wasBookmarked ? next.delete(articleId) : next.add(articleId);
       return next;
     });
-  }, [showToast]);
+
+    if (!wasBookmarked) showToast("Saved to bookmarks");
+
+    supabase.from("user_engagement").upsert({
+      user_id: userId,
+      article_id: articleId,
+      bookmarked: !wasBookmarked,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "user_id,article_id" }).then(({ error }) => {
+      if (error) console.error("Bookmark sync error:", error);
+    });
+  }, [userId, bookmarkedIds, showToast]);
 
   const handleShare = useCallback((article) => {
     setShareTarget(article);
     incrementEngagement(article.id, "share_count", 1);
   }, []);
 
-  // ─── Curate Mode (existing) ───
-
+  // ─── Curate Mode ───
   const handleToggleSelect = useCallback((articleId) => {
     setSelectedIds((prev) => {
       if (prev.includes(articleId)) return prev.filter((id) => id !== articleId);
@@ -268,10 +315,8 @@ function PulseApp({ session }) {
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
 
   // ─── Render ───
-
   return (
     <div style={{ minHeight: "100dvh", maxWidth: "480px", margin: "0 auto", position: "relative" }}>
-      {/* Ambient glow */}
       <div style={{
         position: "fixed", top: "-120px", left: "50%", transform: "translateX(-50%)",
         width: "500px", height: "500px", borderRadius: "50%",
@@ -279,26 +324,21 @@ function PulseApp({ session }) {
         pointerEvents: "none", zIndex: 0,
       }} />
 
-      {/* ═══ HEADER ═══ */}
       <Header
-        searchOpen={searchOpen}
-        searchQuery={searchQuery}
-        activeCategory={activeCategory}
-        searchInputRef={searchInputRef}
-        user={session?.user}
-        activeTab={activeTab}
+        searchOpen={searchOpen} searchQuery={searchQuery} activeCategory={activeCategory}
+        searchInputRef={searchInputRef} user={session?.user} activeTab={activeTab}
         onLogout={async () => { await supabase.auth.signOut(); }}
         onToggleSearch={() => { setSearchOpen(!searchOpen); if (searchOpen) setSearchQuery(""); }}
         onSearchChange={setSearchQuery}
         onCategoryChange={(cat) => { setActiveCategory(cat); setSearchQuery(""); setSearchOpen(false); }}
       />
 
-      {/* ═══ CONTENT ═══ */}
       <main style={{ position: "relative", zIndex: 1 }}>
         {activeTab === "feed" && (
           <FeedView
             articles={filteredArticles} loading={loading} error={error} searchQuery={searchQuery}
             likedIds={likedIds} bookmarkedIds={bookmarkedIds} selectedIds={selectedIdSet}
+            trendingTags={trendingTags} user={session?.user}
             onLike={handleLike} onBookmark={handleBookmark} onShare={handleShare}
             onToggleSelect={handleToggleSelect}
             onClearFilters={() => { setActiveCategory("All"); setSearchQuery(""); setSearchOpen(false); }}
@@ -306,23 +346,17 @@ function PulseApp({ session }) {
             onRetry={loadArticles}
           />
         )}
-
         {activeTab === "watch" && <WatchView />}
         {activeTab === "listen" && <ListenView />}
         {activeTab === "discover" && <DiscoverView />}
-
         {activeTab === "saved" && (
-          <SavedView
-            articles={articles} likedIds={likedIds} bookmarkedIds={bookmarkedIds}
-            onLike={handleLike} onBookmark={handleBookmark} onShare={handleShare}
-          />
+          <SavedView articles={articles} likedIds={likedIds} bookmarkedIds={bookmarkedIds}
+            user={session?.user} onLike={handleLike} onBookmark={handleBookmark} onShare={handleShare} />
         )}
       </main>
 
-      {/* ═══ BOTTOM NAV ═══ */}
       <BottomNav activeTab={activeTab} onTabChange={setActiveTab} />
 
-      {/* ═══ CURATE SELECTION BAR ═══ */}
       {selectedIds.length > 0 && (
         <div style={{
           position: "fixed", bottom: "72px", left: "50%", transform: "translateX(-50%)",
@@ -335,46 +369,28 @@ function PulseApp({ session }) {
             boxShadow: "0 8px 40px rgba(0,0,0,0.6)",
           }}>
             <div>
-              <div style={{ fontSize: "14px", fontWeight: 700, color: "#fff" }}>
-                {selectedIds.length} article{selectedIds.length !== 1 ? "s" : ""} selected
-              </div>
+              <div style={{ fontSize: "14px", fontWeight: 700, color: "#fff" }}>{selectedIds.length} article{selectedIds.length !== 1 ? "s" : ""} selected</div>
               <div style={{ fontSize: "11px", color: "#999", marginTop: "1px" }}>Ready to build your briefing</div>
             </div>
             <div style={{ display: "flex", gap: "8px" }}>
-              <button onClick={() => setSelectedIds([])} style={{
-                background: "none", border: "1px solid #444", borderRadius: "12px",
-                color: "#ccc", padding: "10px 14px", fontSize: "12px", fontWeight: 600,
-              }}>Clear</button>
-              <button onClick={handleOpenNewsletter} style={{
-                background: "#00e5a0", border: "none", borderRadius: "12px",
-                color: "#000", padding: "10px 18px", fontSize: "13px", fontWeight: 700,
-                display: "flex", alignItems: "center", gap: "6px",
-              }}>
-                <NewsletterIcon size={16} />
-                Build
+              <button onClick={() => setSelectedIds([])} style={{ background: "none", border: "1px solid #444", borderRadius: "12px", color: "#ccc", padding: "10px 14px", fontSize: "12px", fontWeight: 600 }}>Clear</button>
+              <button onClick={handleOpenNewsletter} style={{ background: "#00e5a0", border: "none", borderRadius: "12px", color: "#000", padding: "10px 18px", fontSize: "13px", fontWeight: 700, display: "flex", alignItems: "center", gap: "6px" }}>
+                <NewsletterIcon size={16} /> Build
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* ═══ OVERLAYS ═══ */}
       <ShareSheet article={shareTarget} onClose={() => setShareTarget(null)} onToast={showToast} />
       <Toast message={toast.msg} visible={toast.show} />
-
-      {showNewsletter && (
-        <NewsletterBuilder
-          articles={selectedArticles}
-          onClose={() => setShowNewsletter(false)}
-          onToast={showToast}
-        />
-      )}
+      {showNewsletter && <NewsletterBuilder articles={selectedArticles} onClose={() => setShowNewsletter(false)} onToast={showToast} />}
     </div>
   );
 }
 
 // ═══════════════════════════════════════════════
-//  HEADER — existing, passes activeTab for context
+//  HEADER
 // ═══════════════════════════════════════════════
 
 function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user, activeTab, onLogout, onToggleSearch, onSearchChange, onCategoryChange }) {
@@ -383,43 +399,24 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
     ? user.user_metadata.full_name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)
     : (user?.email?.[0] || "?").toUpperCase();
 
-  // Only show category scroller on Feed tab
   const showCategories = activeTab === "feed";
 
   return (
-    <header style={{
-      position: "sticky", top: 0, zIndex: 100,
-      background: "#000", borderBottom: "1px solid #222",
-    }}>
-      {/* Top Row */}
+    <header style={{ position: "sticky", top: 0, zIndex: 100, background: "#000", borderBottom: "1px solid #222" }}>
       <div style={{ padding: "10px 16px 0", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
           <img src="/tic-head.png" alt="TIC" style={{ width: "34px", height: "34px", objectFit: "contain" }} />
           <div>
             <div style={{ display: "flex", alignItems: "baseline", gap: "6px" }}>
-              <h1 style={{
-                fontSize: "22px", fontWeight: 800, margin: 0,
-                fontFamily: "var(--font-display)", color: "#fff", letterSpacing: "-0.5px",
-                animation: "textPulse 4s ease-in-out infinite",
-              }}>Pulse</h1>
-              <div style={{
-                display: "flex", alignItems: "center", gap: "4px",
-                padding: "2px 7px", borderRadius: "6px",
-                background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.15)",
-              }}>
-                <div style={{
-                  width: "5px", height: "5px", borderRadius: "50%",
-                  background: "#00e5a0", animation: "liveDot 2s ease infinite",
-                }} />
+              <h1 style={{ fontSize: "22px", fontWeight: 800, margin: 0, fontFamily: "Georgia, serif", color: "#fff", letterSpacing: "-0.5px" }}>Pulse</h1>
+              <div style={{ display: "flex", alignItems: "center", gap: "4px", padding: "2px 7px", borderRadius: "6px", background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.15)" }}>
+                <div style={{ width: "5px", height: "5px", borderRadius: "50%", background: "#00e5a0", animation: "liveDot 2s ease infinite" }} />
                 <span style={{ fontSize: "9px", fontWeight: 800, color: "#00e5a0", letterSpacing: "1px" }}>LIVE</span>
               </div>
             </div>
-            <div style={{ fontSize: "9px", fontWeight: 700, color: "#888", letterSpacing: "2px", marginTop: "-1px" }}>
-              TALENT INTELLIGENCE COLLECTIVE
-            </div>
+            <div style={{ fontSize: "9px", fontWeight: 700, color: "#888", letterSpacing: "2px", marginTop: "-1px" }}>TALENT INTELLIGENCE COLLECTIVE</div>
           </div>
         </div>
-
         <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
           <button onClick={onToggleSearch} aria-label={searchOpen ? "Close search" : "Open search"} style={{
             background: searchOpen ? "rgba(0,229,160,0.08)" : "none", border: "none",
@@ -428,7 +425,6 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
           }}>
             {searchOpen ? <CloseIcon size={18} /> : <SearchIcon />}
           </button>
-          {/* User avatar */}
           <div style={{ position: "relative" }}>
             <button onClick={() => setShowUserMenu(!showUserMenu)} aria-label="Account menu" style={{
               width: "32px", height: "32px", borderRadius: "50%",
@@ -446,9 +442,7 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
                   boxShadow: "0 8px 32px rgba(0,0,0,0.5)", animation: "fadeSlide 0.15s ease",
                 }}>
                   <div style={{ padding: "10px 12px", borderBottom: "1px solid #333" }}>
-                    <div style={{ fontSize: "13px", fontWeight: 600, color: "#eee" }}>
-                      {user?.user_metadata?.full_name || "User"}
-                    </div>
+                    <div style={{ fontSize: "13px", fontWeight: 600, color: "#eee" }}>{user?.user_metadata?.full_name || "User"}</div>
                     <div style={{ fontSize: "11px", color: "#888", marginTop: "2px" }}>{user?.email}</div>
                   </div>
                   <button onClick={() => { setShowUserMenu(false); onLogout(); }} style={{
@@ -466,36 +460,21 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
         </div>
       </div>
 
-      {/* Search Bar */}
       {searchOpen && (
         <div style={{ padding: "10px 16px 0", animation: "fadeSlide 0.2s ease" }}>
-          <div style={{
-            display: "flex", alignItems: "center", gap: "10px",
-            background: "#111", borderRadius: "14px",
-            padding: "0 14px", border: "1px solid #333",
-          }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", background: "#111", borderRadius: "14px", padding: "0 14px", border: "1px solid #333" }}>
             <SearchIcon size={16} />
             <input ref={searchInputRef} value={searchQuery} onChange={(e) => onSearchChange(e.target.value)}
-              placeholder="Search articles, topics, tags..."
-              style={{ flex: 1, background: "none", border: "none", color: "#eee", padding: "11px 0", fontSize: "14px", outline: "none" }}
-            />
+              placeholder="Search articles, topics, tags..." style={{ flex: 1, background: "none", border: "none", color: "#eee", padding: "11px 0", fontSize: "14px", outline: "none" }} />
             {searchQuery && (
-              <button onClick={() => onSearchChange("")} style={{
-                background: "rgba(255,255,255,0.08)", border: "none", color: "#888",
-                width: "20px", height: "20px", borderRadius: "50%", fontSize: "12px",
-                display: "flex", alignItems: "center", justifyContent: "center",
-              }}>×</button>
+              <button onClick={() => onSearchChange("")} style={{ background: "rgba(255,255,255,0.08)", border: "none", color: "#888", width: "20px", height: "20px", borderRadius: "50%", fontSize: "12px", display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
             )}
           </div>
         </div>
       )}
 
-      {/* Category Scroller — only on Feed tab */}
       {showCategories && (
-        <div style={{
-          display: "flex", gap: "7px", padding: "12px 16px 12px",
-          overflowX: "auto", scrollbarWidth: "none",
-        }}>
+        <div style={{ display: "flex", gap: "7px", padding: "12px 16px 12px", overflowX: "auto", scrollbarWidth: "none" }}>
           {CATEGORIES.map((cat) => {
             const isActive = activeCategory === cat;
             const color = cat === "All" ? "#00e5a0" : (CAT_COLORS[cat] || "#00e5a0");
@@ -512,24 +491,20 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
           })}
         </div>
       )}
-
-      {/* Tab-specific subheader for Watch/Listen */}
-      {!showCategories && !searchOpen && (
-        <div style={{ height: "12px" }} />
-      )}
+      {!showCategories && !searchOpen && <div style={{ height: "12px" }} />}
     </header>
   );
 }
 
 // ═══════════════════════════════════════════════
-//  FEED VIEW — existing, unchanged
+//  FEED VIEW — now with dynamic trending + user prop
 // ═══════════════════════════════════════════════
 
-function FeedView({ articles, loading, error, searchQuery, likedIds, bookmarkedIds, selectedIds, onLike, onBookmark, onShare, onToggleSelect, onClearFilters, onSearchTag, onRetry }) {
+function FeedView({ articles, loading, error, searchQuery, likedIds, bookmarkedIds, selectedIds, trendingTags, user, onLike, onBookmark, onShare, onToggleSelect, onClearFilters, onSearchTag, onRetry }) {
   const hasSelections = selectedIds.size > 0;
   return (
     <div style={{ padding: hasSelections ? "12px 12px 180px" : "12px 12px 110px" }}>
-      <TrendingTicker onTagClick={onSearchTag} />
+      <TrendingTicker tags={trendingTags} onTagClick={onSearchTag} />
 
       {searchQuery && (
         <div style={{
@@ -542,40 +517,29 @@ function FeedView({ articles, loading, error, searchQuery, likedIds, bookmarkedI
             <span style={{ fontSize: "12px", color: "#888" }}>Filtering by:</span>
             <span style={{ fontSize: "13px", fontWeight: 700, color: "#00e5a0" }}>{searchQuery}</span>
           </div>
-          <button onClick={onClearFilters} style={{
-            background: "rgba(255,255,255,0.1)", border: "none", borderRadius: "8px",
-            color: "#fff", padding: "4px 12px", fontSize: "12px", fontWeight: 600,
-          }}>Clear</button>
+          <button onClick={onClearFilters} style={{ background: "rgba(255,255,255,0.1)", border: "none", borderRadius: "8px", color: "#fff", padding: "4px 12px", fontSize: "12px", fontWeight: 600 }}>Clear</button>
         </div>
       )}
 
       {loading && articles.length === 0 && <SkeletonCards />}
 
       {error && (
-        <div style={{ textAlign: "center", padding: "48px 20px", animation: "fadeIn 0.3s" }}>
+        <div style={{ textAlign: "center", padding: "48px 20px" }}>
           <p style={{ fontSize: "14px", color: "#ff3b5c", fontWeight: 500 }}>{error}</p>
-          <button onClick={onRetry} style={{
-            background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.2)",
-            color: "#00e5a0", padding: "8px 20px", borderRadius: "12px",
-            fontSize: "13px", fontWeight: 600, marginTop: "12px",
-          }}>Try again</button>
+          <button onClick={onRetry} style={{ background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.2)", color: "#00e5a0", padding: "8px 20px", borderRadius: "12px", fontSize: "13px", fontWeight: 600, marginTop: "12px" }}>Try again</button>
         </div>
       )}
 
       {!loading && !error && articles.length === 0 && (
-        <div style={{ textAlign: "center", padding: "60px 20px", animation: "fadeIn 0.3s" }}>
+        <div style={{ textAlign: "center", padding: "60px 20px" }}>
           <div style={{ fontSize: "40px", marginBottom: "12px", opacity: 0.5 }}>🔍</div>
           <p style={{ fontSize: "15px", color: "#888", fontWeight: 500 }}>No articles match your filters</p>
-          <button onClick={onClearFilters} style={{
-            background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.2)",
-            color: "#00e5a0", padding: "8px 20px", borderRadius: "12px",
-            fontSize: "13px", fontWeight: 600, marginTop: "12px",
-          }}>Clear filters</button>
+          <button onClick={onClearFilters} style={{ background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.2)", color: "#00e5a0", padding: "8px 20px", borderRadius: "12px", fontSize: "13px", fontWeight: 600, marginTop: "12px" }}>Clear filters</button>
         </div>
       )}
 
       {articles.map((article, i) => (
-        <ArticleCard key={article.id} article={article} index={i}
+        <ArticleCard key={article.id} article={article} index={i} user={user}
           isLiked={likedIds.has(article.id)} isBookmarked={bookmarkedIds.has(article.id)}
           isSelected={selectedIds.has(article.id)}
           onLike={onLike} onBookmark={onBookmark} onShare={onShare} onToggleSelect={onToggleSelect}
@@ -586,7 +550,7 @@ function FeedView({ articles, loading, error, searchQuery, likedIds, bookmarkedI
 }
 
 // ═══════════════════════════════════════════════
-//  WATCH VIEW (NEW — YouTube Videos)
+//  WATCH VIEW
 // ═══════════════════════════════════════════════
 
 function WatchView() {
@@ -606,53 +570,30 @@ function WatchView() {
       } catch { setVideos([]); }
       setLoading(false);
     }
-    setLoading(true);
-    load();
+    setLoading(true); load();
   }, [typeFilter]);
 
-  // ─── Selected video: embedded player ───
   if (selected) {
-    const tc = videoTypeColor(selected.video_type);
-    const thumbUrl = selected.thumbnail_url || (selected.youtube_id ? `https://img.youtube.com/vi/${selected.youtube_id}/hqdefault.jpg` : null);
     return (
       <div style={{ padding: "16px 12px 120px", animation: "fadeSlide 0.3s ease", background: "#000", minHeight: "calc(100vh - 120px)" }}>
-        <div style={{ background: "var(--bg-card, #111)", borderRadius: "16px", border: "1px solid #333", overflow: "hidden" }}>
+        <div style={{ background: "#111", borderRadius: "16px", border: "1px solid #333", overflow: "hidden" }}>
           <div style={{ width: "100%", aspectRatio: "16/9", background: "#000" }}>
-            <iframe src={`https://www.youtube.com/embed/${selected.youtube_id}?rel=0`}
-              style={{ width: "100%", height: "100%", border: "none" }}
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-              allowFullScreen title={selected.title} />
+            <iframe src={`https://www.youtube.com/embed/${selected.youtube_id}?rel=0`} style={{ width: "100%", height: "100%", border: "none" }} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen title={selected.title} />
           </div>
           <div style={{ padding: "16px 18px" }}>
             <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap", alignItems: "center" }}>
-              <span style={{ fontSize: 9, fontFamily: "monospace", padding: "3px 8px", borderRadius: 4, background: `${tc}20`, color: tc, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1 }}>
-                {videoTypeLabel(selected.video_type)}
-              </span>
+              <span style={{ fontSize: 9, fontFamily: "monospace", padding: "3px 8px", borderRadius: 4, background: `${videoTypeColor(selected.video_type)}20`, color: videoTypeColor(selected.video_type), fontWeight: 700, textTransform: "uppercase", letterSpacing: 1 }}>{videoTypeLabel(selected.video_type)}</span>
               <span style={{ fontSize: 11, color: "#666", marginLeft: "auto" }}>{relDate(selected.published_at)}</span>
             </div>
-            <h3 style={{ fontSize: 18, fontWeight: 700, color: "#eee", margin: "0 0 10px", lineHeight: 1.3, fontFamily: "Georgia, serif" }}>
-              {selected.title}
-            </h3>
+            <h3 style={{ fontSize: 18, fontWeight: 700, color: "#eee", margin: "0 0 10px", lineHeight: 1.3, fontFamily: "Georgia, serif" }}>{selected.title}</h3>
             <div style={{ display: "flex", gap: 14, marginBottom: 14 }}>
               <span style={{ fontSize: 12, color: "#888" }}>▶ {fmtViews(selected.view_count)} views</span>
               <span style={{ fontSize: 12, color: "#888" }}>⏱ {selected.duration}</span>
               {selected.channel_title && <span style={{ fontSize: 12, color: "#00e5a0" }}>{selected.channel_title}</span>}
             </div>
-            {selected.description && (
-              <p style={{ fontSize: 13, color: "#777", lineHeight: 1.6, margin: "0 0 14px",
-                maxHeight: 120, overflow: "hidden", padding: "10px 12px", background: "#0a0a0a", borderRadius: 10 }}>
-                {selected.description.substring(0, 400)}{selected.description.length > 400 && "…"}
-              </p>
-            )}
             <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={() => setSelected(null)} style={{
-                padding: "8px 16px", borderRadius: 10, fontSize: 12,
-                background: "#1a1a1e", color: "#ccc", border: "1px solid #333",
-              }}>← Back</button>
-              <a href={`https://www.youtube.com/watch?v=${selected.youtube_id}`} target="_blank" rel="noopener noreferrer"
-                style={{ padding: "8px 16px", borderRadius: 10, fontSize: 12, fontWeight: 700, background: "#00e5a0", color: "#000", display: "inline-block", textDecoration: "none" }}>
-                Watch on YouTube ↗
-              </a>
+              <button onClick={() => setSelected(null)} style={{ padding: "8px 16px", borderRadius: 10, fontSize: 12, background: "#1a1a1e", color: "#ccc", border: "1px solid #333" }}>← Back</button>
+              <a href={`https://www.youtube.com/watch?v=${selected.youtube_id}`} target="_blank" rel="noopener noreferrer" style={{ padding: "8px 16px", borderRadius: 10, fontSize: 12, fontWeight: 700, background: "#00e5a0", color: "#000", display: "inline-block", textDecoration: "none" }}>Watch on YouTube ↗</a>
             </div>
           </div>
         </div>
@@ -660,27 +601,21 @@ function WatchView() {
     );
   }
 
-  // ─── Video grid ───
   return (
     <div style={{ padding: "16px 12px 120px", animation: "fadeSlide 0.3s ease", background: "#000", minHeight: "calc(100vh - 120px)" }}>
-      {/* Type filter pills */}
       <div style={{ display: "flex", gap: 6, marginBottom: 14, overflowX: "auto", scrollbarWidth: "none", padding: "0 4px" }}>
         {["all", "podcast", "video", "short", "panel", "event"].map(t => {
           const isActive = typeFilter === t;
           const color = t === "all" ? "#00e5a0" : videoTypeColor(t);
           return (
             <button key={t} onClick={() => setTypeFilter(t)} style={{
-              padding: "5px 14px", borderRadius: "20px", whiteSpace: "nowrap",
-              fontSize: 11, fontWeight: 700,
-              background: isActive ? `${color}18` : "var(--bg-card, #111)",
-              color: isActive ? color : "#888",
-              border: `1px solid ${isActive ? color + "40" : "var(--border, #222)"}`,
-              transition: "all 0.2s",
+              padding: "5px 14px", borderRadius: "20px", whiteSpace: "nowrap", fontSize: 11, fontWeight: 700,
+              background: isActive ? `${color}18` : "#111", color: isActive ? color : "#888",
+              border: `1px solid ${isActive ? color + "40" : "#222"}`, transition: "all 0.2s",
             }}>{t === "all" ? "All" : videoTypeLabel(t)}</button>
           );
         })}
       </div>
-
       {loading ? (
         <div style={{ textAlign: "center", padding: 50, color: "#666", fontSize: 13 }}>Loading videos…</div>
       ) : videos.length === 0 ? (
@@ -695,22 +630,15 @@ function WatchView() {
             const thumbUrl = v.thumbnail_url || (v.youtube_id ? `https://img.youtube.com/vi/${v.youtube_id}/hqdefault.jpg` : null);
             return (
               <div key={v.id} onClick={() => setSelected(v)} style={{
-                cursor: "pointer", background: "var(--bg-card, #111)", borderRadius: 14,
-                overflow: "hidden", border: "1px solid var(--border, #222)",
-                transition: "border-color 0.2s, transform 0.15s",
+                cursor: "pointer", background: "#111", borderRadius: 14, overflow: "hidden",
+                border: "1px solid #222", transition: "border-color 0.2s, transform 0.15s",
                 animation: `cardIn 0.3s ease ${i * 0.03}s both`,
               }}
                 onMouseEnter={e => { e.currentTarget.style.borderColor = "#444"; e.currentTarget.style.transform = "translateY(-2px)"; }}
-                onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--border, #222)"; e.currentTarget.style.transform = "none"; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = "#222"; e.currentTarget.style.transform = "none"; }}
               >
-                <div style={{
-                  width: "100%", aspectRatio: "16/9", position: "relative",
-                  background: thumbUrl ? `url(${thumbUrl}) center/cover` : `linear-gradient(135deg, #111, #000)`,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                }}>
-                  <span style={{ position: "absolute", top: 6, left: 6, fontSize: 8, fontFamily: "monospace", padding: "2px 6px", borderRadius: 3, background: `${tc}30`, color: tc, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1 }}>
-                    {videoTypeLabel(v.video_type)}
-                  </span>
+                <div style={{ width: "100%", aspectRatio: "16/9", position: "relative", background: thumbUrl ? `url(${thumbUrl}) center/cover` : "linear-gradient(135deg, #111, #000)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <span style={{ position: "absolute", top: 6, left: 6, fontSize: 8, fontFamily: "monospace", padding: "2px 6px", borderRadius: 3, background: `${tc}30`, color: tc, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1 }}>{videoTypeLabel(v.video_type)}</span>
                   {v.duration && <span style={{ position: "absolute", bottom: 6, right: 6, fontSize: 10, fontFamily: "monospace", padding: "2px 6px", borderRadius: 3, background: "rgba(0,0,0,0.8)", color: "#ccc" }}>{v.duration}</span>}
                   <div style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(0,0,0,0.5)", border: "1.5px solid rgba(0,229,160,0.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
                     <div style={{ width: 0, height: 0, borderLeft: "9px solid #00e5a0", borderTop: "6px solid transparent", borderBottom: "6px solid transparent", marginLeft: 2 }} />
@@ -733,7 +661,7 @@ function WatchView() {
 }
 
 // ═══════════════════════════════════════════════
-//  LISTEN VIEW (NEW — Podcast Episodes)
+//  LISTEN VIEW
 // ═══════════════════════════════════════════════
 
 function ListenView() {
@@ -752,31 +680,18 @@ function ListenView() {
         if (sourceFilter) q = q.eq("source_id", sourceFilter);
         const { data } = await q;
         setEpisodes(data || []);
-
-        const { data: srcs } = await supabase.from("sources").select("*")
-          .eq("type", "podcast").eq("active", true).order("tier");
+        const { data: srcs } = await supabase.from("sources").select("*").eq("type", "podcast").eq("active", true).order("tier");
         setSources(srcs || []);
       } catch { setEpisodes([]); setSources([]); }
       setLoading(false);
     }
-    setLoading(true);
-    load();
+    setLoading(true); load();
   }, [sourceFilter]);
 
   return (
     <div style={{ padding: "16px 12px 120px", animation: "fadeSlide 0.3s ease", background: "#000", minHeight: "calc(100vh - 120px)" }}>
-      {/* Podcast header */}
-      <div style={{
-        display: "flex", gap: 14, alignItems: "center", padding: "14px 16px",
-        background: "var(--bg-card, #111)", borderRadius: 16,
-        border: "1px solid var(--border, #222)", marginBottom: 14,
-      }}>
-        <div style={{
-          width: 56, height: 56, borderRadius: 12, flexShrink: 0,
-          background: "linear-gradient(135deg, rgba(0,229,160,0.1), rgba(0,180,216,0.1))",
-          border: "1px solid rgba(0,229,160,0.2)",
-          display: "flex", alignItems: "center", justifyContent: "center",
-        }}>
+      <div style={{ display: "flex", gap: 14, alignItems: "center", padding: "14px 16px", background: "#111", borderRadius: 16, border: "1px solid #222", marginBottom: 14 }}>
+        <div style={{ width: 56, height: 56, borderRadius: 12, flexShrink: 0, background: "linear-gradient(135deg, rgba(0,229,160,0.1), rgba(0,180,216,0.1))", border: "1px solid rgba(0,229,160,0.2)", display: "flex", alignItems: "center", justifyContent: "center" }}>
           <img src="/tic-head.png" alt="TIC" style={{ width: 34, height: 34, objectFit: "contain" }} />
         </div>
         <div>
@@ -786,41 +701,21 @@ function ListenView() {
         </div>
       </div>
 
-      {/* Source filter */}
       {sources.length > 1 && (
         <div style={{ display: "flex", gap: 6, marginBottom: 14, overflowX: "auto", scrollbarWidth: "none", padding: "0 4px" }}>
-          <button onClick={() => setSourceFilter(null)} style={{
-            padding: "5px 14px", borderRadius: 20, fontSize: 11, fontWeight: 700,
-            background: !sourceFilter ? "rgba(0,229,160,0.12)" : "var(--bg-card, #111)",
-            color: !sourceFilter ? "#00e5a0" : "#888",
-            border: `1px solid ${!sourceFilter ? "rgba(0,229,160,0.3)" : "var(--border, #222)"}`,
-            whiteSpace: "nowrap",
-          }}>All Shows</button>
+          <button onClick={() => setSourceFilter(null)} style={{ padding: "5px 14px", borderRadius: 20, fontSize: 11, fontWeight: 700, background: !sourceFilter ? "rgba(0,229,160,0.12)" : "#111", color: !sourceFilter ? "#00e5a0" : "#888", border: `1px solid ${!sourceFilter ? "rgba(0,229,160,0.3)" : "#222"}`, whiteSpace: "nowrap" }}>All Shows</button>
           {sources.map(s => {
             const isActive = sourceFilter === s.id;
-            return (
-              <button key={s.id} onClick={() => setSourceFilter(isActive ? null : s.id)} style={{
-                padding: "5px 14px", borderRadius: 20, fontSize: 11, fontWeight: 700,
-                background: isActive ? "rgba(0,229,160,0.12)" : "var(--bg-card, #111)",
-                color: isActive ? "#00e5a0" : "#888",
-                border: `1px solid ${isActive ? "rgba(0,229,160,0.3)" : "var(--border, #222)"}`,
-                whiteSpace: "nowrap",
-              }}>{s.name.length > 20 ? s.name.substring(0, 18) + "…" : s.name}</button>
-            );
+            return <button key={s.id} onClick={() => setSourceFilter(isActive ? null : s.id)} style={{ padding: "5px 14px", borderRadius: 20, fontSize: 11, fontWeight: 700, background: isActive ? "rgba(0,229,160,0.12)" : "#111", color: isActive ? "#00e5a0" : "#888", border: `1px solid ${isActive ? "rgba(0,229,160,0.3)" : "#222"}`, whiteSpace: "nowrap" }}>{s.name.length > 20 ? s.name.substring(0, 18) + "…" : s.name}</button>;
           })}
         </div>
       )}
 
-      {/* Platform links */}
       <div style={{ display: "flex", gap: 6, marginBottom: 16, justifyContent: "center" }}>
         {["Spotify", "Apple Podcasts", "YouTube", "RSS"].map(p => (
-          <button key={p} style={{
-            padding: "5px 10px", borderRadius: 16, fontSize: 10, fontWeight: 600,
-            background: "var(--bg-card, #111)", color: "#888",
-            border: "1px solid var(--border, #222)", transition: "all 0.2s",
-          }}
+          <button key={p} style={{ padding: "5px 10px", borderRadius: 16, fontSize: 10, fontWeight: 600, background: "#111", color: "#888", border: "1px solid #222", transition: "all 0.2s" }}
             onMouseEnter={e => { e.target.style.borderColor = "#00e5a0"; e.target.style.color = "#00e5a0"; }}
-            onMouseLeave={e => { e.target.style.borderColor = "var(--border, #222)"; e.target.style.color = "#888"; }}
+            onMouseLeave={e => { e.target.style.borderColor = "#222"; e.target.style.color = "#888"; }}
           >{p}</button>
         ))}
       </div>
@@ -838,41 +733,22 @@ function ListenView() {
             const isPlay = playing === ep.id;
             const isExp = expanded === ep.id;
             return (
-              <div key={ep.id} style={{
-                background: "var(--bg-card, #111)", borderRadius: 14, overflow: "hidden",
-                border: `1px solid ${isPlay ? "#00e5a0" : "var(--border, #222)"}`,
-                transition: "border-color 0.3s",
-                animation: `cardIn 0.3s ease ${i * 0.03}s both`,
-              }}>
+              <div key={ep.id} style={{ background: "#111", borderRadius: 14, overflow: "hidden", border: `1px solid ${isPlay ? "#00e5a0" : "#222"}`, transition: "border-color 0.3s", animation: `cardIn 0.3s ease ${i * 0.03}s both` }}>
                 <div style={{ padding: "14px 16px" }}>
                   <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
-                    {/* Play button */}
-                    <button onClick={() => setPlaying(isPlay ? null : ep.id)} style={{
-                      width: 40, height: 40, borderRadius: "50%", flexShrink: 0,
-                      background: isPlay ? "#00e5a0" : "#1a1a1e",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      transition: "all 0.2s", marginTop: 2,
-                    }}>
+                    <button onClick={() => setPlaying(isPlay ? null : ep.id)} style={{ width: 40, height: 40, borderRadius: "50%", flexShrink: 0, background: isPlay ? "#00e5a0" : "#1a1a1e", display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.2s", marginTop: 2, border: "none" }}>
                       {isPlay ? (
-                        <div style={{ display: "flex", gap: 3 }}>
-                          <div style={{ width: 3, height: 14, background: "#000", borderRadius: 1 }} />
-                          <div style={{ width: 3, height: 14, background: "#000", borderRadius: 1 }} />
-                        </div>
+                        <div style={{ display: "flex", gap: 3 }}><div style={{ width: 3, height: 14, background: "#000", borderRadius: 1 }} /><div style={{ width: 3, height: 14, background: "#000", borderRadius: 1 }} /></div>
                       ) : (
                         <div style={{ width: 0, height: 0, borderLeft: "10px solid #eee", borderTop: "7px solid transparent", borderBottom: "7px solid transparent", marginLeft: 2 }} />
                       )}
                     </button>
-
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
-                        <span style={{ fontSize: 10, fontWeight: 700, color: "#00e5a0", fontFamily: "monospace" }}>
-                          {ep.sources?.name || "Podcast"}
-                        </span>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: "#00e5a0", fontFamily: "monospace" }}>{ep.sources?.name || "Podcast"}</span>
                         <span style={{ fontSize: 10, color: "#666" }}>{relDate(ep.published_at)}</span>
                       </div>
-                      <h4 style={{ fontSize: 15, fontWeight: 700, color: "#eee", margin: "0 0 5px", lineHeight: 1.3, fontFamily: "Georgia, serif" }}>
-                        {ep.title}
-                      </h4>
+                      <h4 style={{ fontSize: 15, fontWeight: 700, color: "#eee", margin: "0 0 5px", lineHeight: 1.3, fontFamily: "Georgia, serif" }}>{ep.title}</h4>
                       {ep.guest_name && (
                         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
                           <span style={{ fontSize: 12, color: "#aaa" }}>{ep.guest_name}</span>
@@ -880,23 +756,11 @@ function ListenView() {
                         </div>
                       )}
                       {isExp && ep.description && (
-                        <div style={{ marginTop: 8, marginBottom: 8, fontSize: 13, color: "#999", lineHeight: 1.6, padding: "10px 12px", background: "#0a0a0a", borderRadius: 10, animation: "fadeSlide 0.2s ease" }}>
-                          {ep.description}
-                        </div>
-                      )}
-                      {ep.keyword_matches?.length > 0 && (
-                        <div style={{ display: "flex", gap: 3, marginBottom: 4, flexWrap: "wrap" }}>
-                          {ep.keyword_matches.map(kw => (
-                            <span key={kw} style={{ fontSize: 8, fontFamily: "monospace", padding: "1px 5px", borderRadius: 3, background: "rgba(168,85,247,0.1)", color: "#a855f7" }}>{kw}</span>
-                          ))}
-                        </div>
+                        <div style={{ marginTop: 8, marginBottom: 8, fontSize: 13, color: "#999", lineHeight: 1.6, padding: "10px 12px", background: "#0a0a0a", borderRadius: 10, animation: "fadeSlide 0.2s ease" }}>{ep.description}</div>
                       )}
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                         {ep.duration && <span style={{ fontSize: 10, color: "#666" }}>⏱ {ep.duration}</span>}
-                        {ep.link && <a href={ep.link} target="_blank" rel="noopener noreferrer" style={{ fontSize: 10, color: "#00e5a0", textDecoration: "none" }}>↗ Open</a>}
-                        <button onClick={() => setExpanded(isExp ? null : ep.id)} style={{ fontSize: 11, color: "#00e5a0", marginLeft: "auto" }}>
-                          {isExp ? "Less ↑" : "More ↓"}
-                        </button>
+                        <button onClick={() => setExpanded(isExp ? null : ep.id)} style={{ fontSize: 11, color: "#00e5a0", marginLeft: "auto", background: "none", border: "none" }}>{isExp ? "Less ↑" : "More ↓"}</button>
                       </div>
                     </div>
                   </div>
@@ -911,18 +775,11 @@ function ListenView() {
 }
 
 // ═══════════════════════════════════════════════
-//  TRENDING TICKER — existing, unchanged
+//  TRENDING TICKER — now dynamic
 // ═══════════════════════════════════════════════
 
-const TRENDING_TAGS = [
-  { tag: "#AgenticAI", count: "2.4k" },
-  { tag: "#SkillsTaxonomy", count: "1.8k" },
-  { tag: "#CHROTurnover", count: "956" },
-  { tag: "#GreenJobs", count: "743" },
-  { tag: "#PayTransparency", count: "1.2k" },
-];
-
-function TrendingTicker({ onTagClick }) {
+function TrendingTicker({ tags, onTagClick }) {
+  if (!tags || tags.length === 0) return null;
   return (
     <div style={{
       display: "flex", alignItems: "center", gap: "10px", padding: "10px 14px",
@@ -935,7 +792,7 @@ function TrendingTicker({ onTagClick }) {
         <span style={{ fontSize: "10px", fontWeight: 800, letterSpacing: "1.2px" }}>TRENDING</span>
       </div>
       <div style={{ width: "1px", height: "14px", background: "#333", flexShrink: 0 }} />
-      {TRENDING_TAGS.map((t) => (
+      {tags.map((t) => (
         <button key={t.tag} onClick={() => onTagClick(t.tag.slice(1))} style={{
           background: "none", border: "none", color: "#888",
           fontSize: "11px", fontWeight: 600, whiteSpace: "nowrap",
@@ -950,65 +807,33 @@ function TrendingTicker({ onTagClick }) {
 }
 
 // ═══════════════════════════════════════════════
-//  SKELETON LOADING — existing, unchanged
+//  SKELETON, DISCOVER, SAVED, BOTTOM NAV
 // ═══════════════════════════════════════════════
 
 function SkeletonCards() {
   return (
     <div style={{ animation: "fadeIn 0.3s" }}>
       {[0, 1, 2].map((i) => (
-        <div key={i} style={{
-          background: "#111", borderRadius: "20px",
-          overflow: "hidden", marginBottom: "16px", border: "1px solid #222",
-        }}>
+        <div key={i} style={{ background: "#111", borderRadius: "20px", overflow: "hidden", marginBottom: "16px", border: "1px solid #222" }}>
           <div style={{ padding: "14px 18px", display: "flex", alignItems: "center", gap: "11px" }}>
             <div className="skeleton" style={{ width: "34px", height: "34px", borderRadius: "10px" }} />
-            <div style={{ flex: 1 }}>
-              <div className="skeleton" style={{ width: "120px", height: "12px", marginBottom: "6px" }} />
-              <div className="skeleton" style={{ width: "80px", height: "10px" }} />
-            </div>
+            <div style={{ flex: 1 }}><div className="skeleton" style={{ width: "120px", height: "12px", marginBottom: "6px" }} /><div className="skeleton" style={{ width: "80px", height: "10px" }} /></div>
           </div>
           <div className="skeleton" style={{ width: "100%", height: "200px" }} />
-          <div style={{ padding: "14px 18px" }}>
-            <div className="skeleton" style={{ width: "60px", height: "10px", marginBottom: "10px" }} />
-            <div className="skeleton" style={{ width: "100%", height: "12px", marginBottom: "6px" }} />
-            <div className="skeleton" style={{ width: "85%", height: "12px", marginBottom: "6px" }} />
-            <div className="skeleton" style={{ width: "60%", height: "12px" }} />
-          </div>
+          <div style={{ padding: "14px 18px" }}><div className="skeleton" style={{ width: "60px", height: "10px", marginBottom: "10px" }} /><div className="skeleton" style={{ width: "100%", height: "12px", marginBottom: "6px" }} /><div className="skeleton" style={{ width: "85%", height: "12px" }} /></div>
         </div>
       ))}
     </div>
   );
 }
 
-// ═══════════════════════════════════════════════
-//  DISCOVER VIEW — existing, unchanged
-// ═══════════════════════════════════════════════
-
 function DiscoverView() {
   const [substackArticles, setSubstackArticles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Decode HTML entities that RSS feeds sometimes include raw
-  const decode = (str) => {
-    if (!str) return "";
-    try {
-      const txt = document.createElement("textarea");
-      txt.innerHTML = str;
-      return txt.value;
-    } catch { return str; }
-  };
-
-  // Deduplicate by URL
-  const dedupe = (articles) => {
-    const seen = new Set();
-    return articles.filter(a => {
-      if (seen.has(a.url)) return false;
-      seen.add(a.url);
-      return true;
-    });
-  };
+  const decode = (str) => { if (!str) return ""; try { const txt = document.createElement("textarea"); txt.innerHTML = str; return txt.value; } catch { return str; } };
+  const dedupe = (articles) => { const seen = new Set(); return articles.filter(a => { if (seen.has(a.url)) return false; seen.add(a.url); return true; }); };
 
   useEffect(() => {
     let cancelled = false;
@@ -1025,10 +850,7 @@ function DiscoverView() {
     return () => { cancelled = true; };
   }, []);
 
-  const formatDate = (iso) => {
-    if (!iso) return "";
-    return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
-  };
+  const formatDate = (iso) => { if (!iso) return ""; return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }); };
 
   return (
     <div style={{ padding: "24px 16px 120px", animation: "fadeSlide 0.3s ease" }}>
@@ -1037,27 +859,13 @@ function DiscoverView() {
       </div>
       <p style={{ fontSize: "13px", color: "#888", margin: "0 0 24px" }}>Articles and insights from the Talent Intelligence Collective</p>
 
-      {loading && (
-        <div style={{ padding: "40px 0", textAlign: "center" }}>
-          <div style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#00e5a0", margin: "0 auto", animation: "liveDot 1.5s ease infinite" }} />
-          <p style={{ fontSize: "13px", color: "#666", marginTop: "12px" }}>Loading TIC content...</p>
-        </div>
-      )}
+      {loading && <div style={{ padding: "40px 0", textAlign: "center" }}><div style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#00e5a0", margin: "0 auto", animation: "liveDot 1.5s ease infinite" }} /><p style={{ fontSize: "13px", color: "#666", marginTop: "12px" }}>Loading TIC content...</p></div>}
 
-      {error && (
-        <div style={{ padding: "20px", borderRadius: "14px", background: "#111", border: "1px solid #333", textAlign: "center" }}>
-          <p style={{ fontSize: "13px", color: "#888", margin: 0 }}>{error}</p>
-          <a href="https://talentintelligencecollective.substack.com" target="_blank" rel="noopener noreferrer"
-            style={{ fontSize: "12px", color: "#00e5a0", marginTop: "8px", display: "inline-block" }}>Visit TIC Substack directly →</a>
-        </div>
-      )}
+      {error && <div style={{ padding: "20px", borderRadius: "14px", background: "#111", border: "1px solid #333", textAlign: "center" }}><p style={{ fontSize: "13px", color: "#888", margin: 0 }}>{error}</p></div>}
 
       {!loading && !error && substackArticles.map((article, i) => (
         <a key={article.url} href={article.url} target="_blank" rel="noopener noreferrer" style={{
-          display: "block", textDecoration: "none", marginBottom: "10px",
-          padding: "14px 16px", background: "#0a0a0a", borderRadius: "14px",
-          border: "1px solid #1a1a1a", transition: "border-color 0.2s",
-          animation: `cardIn 0.3s ease ${i * 0.03}s both`,
+          display: "block", textDecoration: "none", marginBottom: "10px", padding: "14px 16px", background: "#0a0a0a", borderRadius: "14px", border: "1px solid #1a1a1a", transition: "border-color 0.2s", animation: `cardIn 0.3s ease ${i * 0.03}s both`,
         }}
           onMouseEnter={(e) => e.currentTarget.style.borderColor = "#333"}
           onMouseLeave={(e) => e.currentTarget.style.borderColor = "#1a1a1a"}
@@ -1067,41 +875,25 @@ function DiscoverView() {
             {article.publishedAt && (<><span style={{ color: "#333" }}>·</span><span style={{ fontSize: "11px", color: "#666" }}>{formatDate(article.publishedAt)}</span></>)}
           </div>
           <h3 style={{ fontSize: "15px", fontWeight: 700, color: "#eee", margin: "0 0 4px", lineHeight: 1.3, fontFamily: "Georgia, serif" }}>{decode(article.title)}</h3>
-          {article.description && (
-            <p style={{ fontSize: "12px", lineHeight: 1.5, color: "#777", margin: 0, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{decode(article.description)}</p>
-          )}
+          {article.description && <p style={{ fontSize: "12px", lineHeight: 1.5, color: "#777", margin: 0, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{decode(article.description)}</p>}
         </a>
       ))}
 
-      {!loading && !error && (
-        <div style={{ textAlign: "center", padding: "16px 0" }}>
-          <a href="https://talentintelligencecollective.substack.com" target="_blank" rel="noopener noreferrer"
-            style={{ fontSize: "13px", color: "#888", textDecoration: "none", padding: "10px 20px", borderRadius: "12px", border: "1px solid #333", display: "inline-block", transition: "all 0.2s" }}
-            onMouseEnter={(e) => { e.currentTarget.style.color = "#00e5a0"; e.currentTarget.style.borderColor = "#00e5a0"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = "#888"; e.currentTarget.style.borderColor = "#333"; }}
-          >Subscribe to TIC on Substack</a>
-        </div>
-      )}
+      {!loading && !error && <div style={{ textAlign: "center", padding: "16px 0" }}>
+        <a href="https://talentintelligencecollective.substack.com" target="_blank" rel="noopener noreferrer" style={{ fontSize: "13px", color: "#888", textDecoration: "none", padding: "10px 20px", borderRadius: "12px", border: "1px solid #333", display: "inline-block" }}>Subscribe to TIC on Substack</a>
+      </div>}
     </div>
   );
 }
 
-// ═══════════════════════════════════════════════
-//  SAVED VIEW — existing, unchanged
-// ═══════════════════════════════════════════════
-
-function SavedView({ articles, likedIds, bookmarkedIds, onLike, onBookmark, onShare }) {
+function SavedView({ articles, likedIds, bookmarkedIds, user, onLike, onBookmark, onShare }) {
   const savedArticles = articles.filter((a) => bookmarkedIds.has(a.id));
-
   return (
     <div style={{ padding: "24px 12px 120px", animation: "fadeSlide 0.3s ease" }}>
       <div style={{ padding: "0 4px", marginBottom: "20px" }}>
         <h2 style={{ fontSize: "24px", fontWeight: 700, color: "#fff", margin: "0 0 6px", fontFamily: "Georgia, serif" }}>Saved</h2>
-        <p style={{ fontSize: "13px", color: "#888", margin: 0 }}>
-          {savedArticles.length} article{savedArticles.length !== 1 ? "s" : ""} bookmarked
-        </p>
+        <p style={{ fontSize: "13px", color: "#888", margin: 0 }}>{savedArticles.length} article{savedArticles.length !== 1 ? "s" : ""} bookmarked</p>
       </div>
-
       {savedArticles.length === 0 ? (
         <div style={{ textAlign: "center", padding: "60px 20px" }}>
           <div style={{ fontSize: "40px", marginBottom: "12px", opacity: 0.5 }}>🔖</div>
@@ -1109,19 +901,14 @@ function SavedView({ articles, likedIds, bookmarkedIds, onLike, onBookmark, onSh
         </div>
       ) : (
         savedArticles.map((article, i) => (
-          <ArticleCard key={article.id} article={article} index={i}
+          <ArticleCard key={article.id} article={article} index={i} user={user}
             isLiked={likedIds.has(article.id)} isBookmarked={bookmarkedIds.has(article.id)}
-            onLike={onLike} onBookmark={onBookmark} onShare={onShare}
-          />
+            onLike={onLike} onBookmark={onBookmark} onShare={onShare} />
         ))
       )}
     </div>
   );
 }
-
-// ═══════════════════════════════════════════════
-//  BOTTOM NAV — updated with Watch + Listen
-// ═══════════════════════════════════════════════
 
 function BottomNav({ activeTab, onTabChange }) {
   const tabs = [
@@ -1131,30 +918,20 @@ function BottomNav({ activeTab, onTabChange }) {
     { id: "discover", label: "TIC", Icon: DiscoverIcon },
     { id: "saved", label: "Saved", Icon: () => <BookmarkIcon filled={false} size={22} /> },
   ];
-
   return (
     <nav style={{
       position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)",
-      width: "100%", maxWidth: "480px", zIndex: 100,
-      background: "#000", borderTop: "1px solid #222",
-      display: "flex", justifyContent: "space-around",
-      padding: "8px 0 env(safe-area-inset-bottom, 20px)",
+      width: "100%", maxWidth: "480px", zIndex: 100, background: "#000", borderTop: "1px solid #222",
+      display: "flex", justifyContent: "space-around", padding: "8px 0 env(safe-area-inset-bottom, 20px)",
     }}>
       {tabs.map((tab) => {
         const isActive = activeTab === tab.id;
         return (
           <button key={tab.id} onClick={() => onTabChange(tab.id)} aria-label={tab.label} style={{
-            background: "none", border: "none",
-            display: "flex", flexDirection: "column", alignItems: "center", gap: "3px",
-            color: isActive ? "#00e5a0" : "#888",
-            transition: "color 0.2s", padding: "6px 10px", position: "relative",
+            background: "none", border: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: "3px",
+            color: isActive ? "#00e5a0" : "#888", transition: "color 0.2s", padding: "6px 10px", position: "relative",
           }}>
-            {isActive && (
-              <div style={{
-                position: "absolute", top: "-8px", left: "50%", transform: "translateX(-50%)",
-                width: "20px", height: "2px", borderRadius: "1px", background: "#00e5a0",
-              }} />
-            )}
+            {isActive && <div style={{ position: "absolute", top: "-8px", left: "50%", transform: "translateX(-50%)", width: "20px", height: "2px", borderRadius: "1px", background: "#00e5a0" }} />}
             <tab.Icon size={22} />
             <span style={{ fontSize: "9px", fontWeight: 700, letterSpacing: "0.5px" }}>{tab.label}</span>
           </button>
