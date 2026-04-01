@@ -28,40 +28,26 @@ async function getUploadsPlaylist(channelId) {
   return data.items[0].contentDetails.relatedPlaylists.uploads;
 }
 
-// Get ALL videos from a playlist (paginates through entire history)
+// Get recent videos from a playlist (capped at 50 per channel to avoid timeouts)
 async function getPlaylistItems(playlistId) {
-  const allItems = [];
-  let pageToken = null;
+  const url = `${YT_BASE}/playlistItems?part=snippet,contentDetails&playlistId=${playlistId}&maxResults=50&key=${YT_API_KEY}`;
+  const res = await fetch(url);
+  const data = await res.json();
 
-  do {
-    let url = `${YT_BASE}/playlistItems?part=snippet,contentDetails&playlistId=${playlistId}&maxResults=50&key=${YT_API_KEY}`;
-    if (pageToken) url += `&pageToken=${pageToken}`;
+  if (!data.items) return [];
 
-    const res = await fetch(url);
-    const data = await res.json();
-
-    if (!data.items) break;
-
-    for (const item of data.items) {
-      allItems.push({
-        videoId: item.contentDetails.videoId,
-        title: item.snippet.title,
-        description: item.snippet.description,
-        publishedAt: item.snippet.publishedAt,
-        channelTitle: item.snippet.channelTitle,
-        thumbnail:
-          item.snippet.thumbnails?.maxres?.url ||
-          item.snippet.thumbnails?.high?.url ||
-          item.snippet.thumbnails?.medium?.url ||
-          item.snippet.thumbnails?.default?.url,
-      });
-    }
-
-    pageToken = data.nextPageToken || null;
-    console.log(`[fetch-youtube] Fetched page, ${allItems.length} videos so far...`);
-  } while (pageToken);
-
-  return allItems;
+  return data.items.map((item) => ({
+    videoId: item.contentDetails.videoId,
+    title: item.snippet.title,
+    description: item.snippet.description,
+    publishedAt: item.snippet.publishedAt,
+    channelTitle: item.snippet.channelTitle,
+    thumbnail:
+      item.snippet.thumbnails?.maxres?.url ||
+      item.snippet.thumbnails?.high?.url ||
+      item.snippet.thumbnails?.medium?.url ||
+      item.snippet.thumbnails?.default?.url,
+  }));
 }
 
 // Get video details (duration, stats) for a batch of video IDs
