@@ -179,20 +179,27 @@ function PulseApp({ session }) {
   // ─── Client-side filtering (existing) ───
 
   const filteredArticles = useMemo(() => {
-    return articles.filter((a) => {
-      const matchesCategory = activeCategory === "All" || a.category === activeCategory;
-      if (!matchesCategory) return false;
-      if (searchQuery) {
-        const q = searchQuery.toLowerCase();
-        return (
-          (a.title || "").toLowerCase().includes(q) ||
-          (a.tldr || "").toLowerCase().includes(q) ||
-          (a.tags || []).some((t) => t.toLowerCase().includes(q)) ||
-          (a.category || "").toLowerCase().includes(q)
-        );
-      }
-      return true;
-    });
+    const freshnessCutoff = Date.now() - 48 * 60 * 60 * 1000; // 48 hours
+    return articles
+      .filter((a) => {
+        // Freshness gate: only show articles from last 48 hours
+        const pubDate = new Date(a.published_at || a.created_at).getTime();
+        if (pubDate < freshnessCutoff) return false;
+
+        const matchesCategory = activeCategory === "All" || a.category === activeCategory;
+        if (!matchesCategory) return false;
+        if (searchQuery) {
+          const q = searchQuery.toLowerCase();
+          return (
+            (a.title || "").toLowerCase().includes(q) ||
+            (a.tldr || "").toLowerCase().includes(q) ||
+            (a.tags || []).some((t) => t.toLowerCase().includes(q)) ||
+            (a.category || "").toLowerCase().includes(q)
+          );
+        }
+        return true;
+      })
+      .sort((a, b) => new Date(b.published_at || b.created_at) - new Date(a.published_at || a.created_at));
   }, [articles, activeCategory, searchQuery]);
 
   useEffect(() => {
@@ -618,7 +625,7 @@ function WatchView() {
     const tc = videoTypeColor(selected.video_type);
     const thumbUrl = selected.thumbnail_url || (selected.youtube_id ? `https://img.youtube.com/vi/${selected.youtube_id}/hqdefault.jpg` : null);
     return (
-      <div style={{ padding: "16px 12px 120px", animation: "fadeSlide 0.3s ease" }}>
+      <div style={{ padding: "16px 12px 120px", animation: "fadeSlide 0.3s ease", background: "#000", minHeight: "calc(100vh - 120px)" }}>
         <div style={{ background: "var(--bg-card, #111)", borderRadius: "16px", border: "1px solid #333", overflow: "hidden" }}>
           <div style={{ width: "100%", aspectRatio: "16/9", background: "#000" }}>
             <iframe src={`https://www.youtube.com/embed/${selected.youtube_id}?rel=0`}
@@ -665,7 +672,7 @@ function WatchView() {
 
   // ─── Video grid ───
   return (
-    <div style={{ padding: "16px 12px 120px", animation: "fadeSlide 0.3s ease" }}>
+    <div style={{ padding: "16px 12px 120px", animation: "fadeSlide 0.3s ease", background: "#000", minHeight: "calc(100vh - 120px)" }}>
       {/* Type filter pills */}
       <div style={{ display: "flex", gap: 6, marginBottom: 14, overflowX: "auto", scrollbarWidth: "none", padding: "0 4px" }}>
         {["all", "podcast", "video", "short", "panel", "event"].map(t => {
@@ -767,7 +774,7 @@ function ListenView() {
   }, [sourceFilter]);
 
   return (
-    <div style={{ padding: "16px 12px 120px", animation: "fadeSlide 0.3s ease" }}>
+    <div style={{ padding: "16px 12px 120px", animation: "fadeSlide 0.3s ease", background: "#000", minHeight: "calc(100vh - 120px)" }}>
       {/* Podcast header */}
       <div style={{
         display: "flex", gap: 14, alignItems: "center", padding: "14px 16px",
@@ -993,13 +1000,33 @@ function DiscoverView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  // Decode HTML entities that RSS feeds sometimes include raw
+  const decode = (str) => {
+    if (!str) return "";
+    try {
+      const txt = document.createElement("textarea");
+      txt.innerHTML = str;
+      return txt.value;
+    } catch { return str; }
+  };
+
+  // Deduplicate by URL
+  const dedupe = (articles) => {
+    const seen = new Set();
+    return articles.filter(a => {
+      if (seen.has(a.url)) return false;
+      seen.add(a.url);
+      return true;
+    });
+  };
+
   useEffect(() => {
     let cancelled = false;
     async function load() {
       try {
         const res = await fetch("/.netlify/functions/fetch-substack");
         const data = await res.json();
-        if (!cancelled && data.ok) { setSubstackArticles(data.articles || []); }
+        if (!cancelled && data.ok) { setSubstackArticles(dedupe(data.articles || [])); }
         else if (!cancelled) { setError("Couldn't load TIC content"); }
       } catch { if (!cancelled) setError("Couldn't connect to TIC feed"); }
       finally { if (!cancelled) setLoading(false); }
@@ -1050,9 +1077,9 @@ function DiscoverView() {
             <span style={{ fontSize: "10px", fontWeight: 700, color: "#00e5a0", letterSpacing: "1px" }}>TIC</span>
             {article.publishedAt && (<><span style={{ color: "#333" }}>·</span><span style={{ fontSize: "11px", color: "#666" }}>{formatDate(article.publishedAt)}</span></>)}
           </div>
-          <h3 style={{ fontSize: "15px", fontWeight: 700, color: "#eee", margin: "0 0 4px", lineHeight: 1.3, fontFamily: "Georgia, serif" }}>{article.title}</h3>
+          <h3 style={{ fontSize: "15px", fontWeight: 700, color: "#eee", margin: "0 0 4px", lineHeight: 1.3, fontFamily: "Georgia, serif" }}>{decode(article.title)}</h3>
           {article.description && (
-            <p style={{ fontSize: "12px", lineHeight: 1.5, color: "#777", margin: 0, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{article.description}</p>
+            <p style={{ fontSize: "12px", lineHeight: 1.5, color: "#777", margin: 0, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{decode(article.description)}</p>
           )}
         </a>
       ))}
