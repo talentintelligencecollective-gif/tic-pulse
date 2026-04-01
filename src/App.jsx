@@ -492,8 +492,8 @@ background: "#000",
                   gap: "4px",
                   padding: "2px 7px",
                   borderRadius: "6px",
-                  background: "var(--accent-muted)",
-                  border: "1px solid rgba(0,229,160,0.15)",
+                  background: "rgba(0,229,160,0.12)",
+border: "1px solid rgba(0,229,160,0.2)",
                 }}
               >
                 <div
@@ -505,12 +505,12 @@ background: "#000",
                     animation: "liveDot 2s ease infinite",
                   }}
                 />
-                <span style={{ fontSize: "9px", fontWeight: 800, color: "var(--accent)", letterSpacing: "1px" }}>
+                <span style={{ fontSize: "9px", fontWeight: 800, color: "#00e5a0", letterSpacing: "1px" }}>
                   LIVE
                 </span>
               </div>
             </div>
-            <div style={{ fontSize: "9px", fontWeight: 700, color: "var(--text-muted)", letterSpacing: "2px", marginTop: "-1px" }}>
+            <div style={{ fontSize: "9px", fontWeight: 700, color: "#666", letterSpacing: "2px", marginTop: "-1px" }}>
               TALENT INTELLIGENCE COLLECTIVE
             </div>
           </div>
@@ -523,7 +523,7 @@ background: "#000",
             style={{
               background: searchOpen ? "var(--accent-muted)" : "none",
               border: "none",
-              color: searchOpen ? "var(--accent)" : "var(--text-muted)",
+              color: searchOpen ? "#00e5a0" : "#888",
               padding: "8px",
               borderRadius: "12px",
               display: "flex",
@@ -538,7 +538,7 @@ background: "#000",
             style={{
               background: "none",
               border: "none",
-              color: "var(--text-muted)",
+              color: "#888",
               padding: "8px",
               borderRadius: "12px",
               position: "relative",
@@ -556,7 +556,7 @@ background: "#000",
                 height: "7px",
                 borderRadius: "50%",
                 background: "var(--red)",
-                border: "2px solid var(--bg)",
+                border: "2px solid #000",
               }}
             />
           </button>
