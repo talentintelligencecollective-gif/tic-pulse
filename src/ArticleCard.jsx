@@ -13,6 +13,18 @@ const CAT_COLORS = {
   "DEI": "#8b5cf6",
 };
 
+// Category → fallback gradient (visible, branded, not just black)
+const CAT_GRADIENTS = {
+  "Talent Strategy": ["#0a1a14", "#0d2b20"],
+  "Labour Market": ["#0a141a", "#0d202b"],
+  "Automation": ["#1a120a", "#2b1a0d"],
+  "Executive Moves": ["#140a1a", "#200d2b"],
+  "Compensation": ["#1a160a", "#2b210d"],
+  "Workforce Planning": ["#1a0a14", "#2b0d20"],
+  "Skills": ["#0a1618", "#0d2225"],
+  "DEI": ["#110a1a", "#1a0d2b"],
+};
+
 // Format counts: 1200 → "1.2k"
 function fmt(n) {
   if (n === null || n === undefined) return "0";
@@ -27,20 +39,17 @@ function sourceAbbr(name) {
   return words.slice(0, 2).map((w) => w[0]).join("").toUpperCase();
 }
 
-// Fallback image as a simple data URI
-const FALLBACK_IMAGE =
-  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='800' height='400' fill='%23111'%3E%3Crect width='800' height='400'/%3E%3Ctext x='400' y='200' text-anchor='middle' fill='%23333' font-family='sans-serif' font-size='16'%3ETIC Pulse%3C/text%3E%3C/svg%3E";
-
 export default function ArticleCard({ article, index, onLike, onBookmark, onShare, isLiked, isBookmarked, isSelected, onToggleSelect }) {
   const [showComments, setShowComments] = useState(false);
   const [imgError, setImgError] = useState(false);
 
   const color = CAT_COLORS[article.category] || "#00e5a0";
   const abbr = sourceAbbr(article.source_name);
-  const imageUrl = imgError ? FALLBACK_IMAGE : (article.image_url || FALLBACK_IMAGE);
+  const hasImage = article.image_url && !imgError;
+  const [grad1, grad2] = CAT_GRADIENTS[article.category] || ["#111", "#1a1a1a"];
 
-  // Relative time display
-  const timeDisplay = formatRelativeTime(article.created_at);
+  // Use published_at first (actual publication date), fall back to created_at (DB insert time)
+  const timeDisplay = formatRelativeTime(article.published_at || article.created_at);
 
   return (
     <article
@@ -121,10 +130,11 @@ export default function ArticleCard({ article, index, onLike, onBookmark, onShar
           style={{
             position: "absolute",
             inset: 0,
-            backgroundImage: `url(${imageUrl})`,
+            backgroundImage: hasImage ? `url(${article.image_url})` : "none",
             backgroundSize: "cover",
             backgroundPosition: "center",
-            backgroundColor: "#0a0a0a",
+            // Fallback: category-colored gradient instead of plain black
+            background: hasImage ? undefined : `linear-gradient(135deg, ${grad1}, ${grad2})`,
             transition: "transform 0.7s cubic-bezier(0.16, 1, 0.3, 1)",
           }}
           onMouseEnter={(e) => (e.currentTarget.style.transform = "scale(1.04)")}
@@ -138,6 +148,20 @@ export default function ArticleCard({ article, index, onLike, onBookmark, onShar
             style={{ display: "none" }}
             onError={() => setImgError(true)}
           />
+        )}
+        {/* Fallback: show source + category label when no image */}
+        {!hasImage && (
+          <div style={{
+            position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
+            textAlign: "center", opacity: 0.4,
+          }}>
+            <div style={{ fontSize: "28px", fontWeight: 800, color, fontFamily: "Georgia, serif", letterSpacing: "-1px" }}>
+              {abbr}
+            </div>
+            <div style={{ fontSize: "9px", fontWeight: 700, color: "#888", letterSpacing: "2px", textTransform: "uppercase", marginTop: "4px" }}>
+              {article.category}
+            </div>
+          </div>
         )}
         <div
           style={{
