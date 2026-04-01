@@ -6,7 +6,7 @@ import ShareSheet from "./ShareSheet.jsx";
 import NewsletterBuilder from "./NewsletterBuilder.jsx";
 import Toast from "./Toast.jsx";
 import {
-  SearchIcon, CloseIcon, BellIcon, TrendingIcon, BookmarkIcon,
+  SearchIcon, CloseIcon, TrendingIcon, BookmarkIcon,
   FeedIcon, DiscoverIcon, PeopleIcon, NewsletterIcon,
 } from "./Icons.jsx";
 
@@ -428,16 +428,6 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
           }}>
             {searchOpen ? <CloseIcon size={18} /> : <SearchIcon />}
           </button>
-          <button aria-label="Notifications" style={{
-            background: "none", border: "none", color: "#888",
-            padding: "8px", borderRadius: "12px", position: "relative", display: "flex", alignItems: "center",
-          }}>
-            <BellIcon />
-            <div style={{
-              position: "absolute", top: "5px", right: "5px", width: "7px", height: "7px",
-              borderRadius: "50%", background: "#ff3b5c", border: "2px solid #000",
-            }} />
-          </button>
           {/* User avatar */}
           <div style={{ position: "relative" }}>
             <button onClick={() => setShowUserMenu(!showUserMenu)} aria-label="Account menu" style={{
@@ -609,7 +599,7 @@ function WatchView() {
     async function load() {
       try {
         let q = supabase.from("videos").select("*, sources(name, tier)")
-          .order("published_at", { ascending: false }).limit(60);
+          .order("published_at", { ascending: false }).limit(200);
         if (typeFilter !== "all") q = q.eq("video_type", typeFilter);
         const { data } = await q;
         setVideos(data || []);
