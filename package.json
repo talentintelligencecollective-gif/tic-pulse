@@ -1,99 +1,22 @@
-// netlify/functions/identify-dvd.js
-// Receives a base64 image, sends to Claude Vision, returns extracted film title
-
-const Anthropic = require('@anthropic-ai/sdk');
-
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
-exports.handler = async (event) => {
-  if (event.httpMethod !== 'POST') {
-    return { statusCode: 405, body: JSON.stringify({ error: 'Method not allowed' }) };
-  }
-
-  let body;
-  try {
-    body = JSON.parse(event.body);
-  } catch {
-    return { statusCode: 400, body: JSON.stringify({ error: 'Invalid JSON body' }) };
-  }
-
-  const { image, mimeType = 'image/jpeg' } = body;
-
-  if (!image) {
-    return { statusCode: 400, body: JSON.stringify({ error: 'No image provided' }) };
-  }
-
-  try {
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-5',
-      max_tokens: 256,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'image',
-              source: {
-                type: 'base64',
-                media_type: mimeType,
-                data: image,
-              },
-            },
-            {
-              type: 'text',
-              text: `This is an image of a DVD — either the disc label itself, a DVD case, or a box set.
-
-Your task: extract the film or TV series title only.
-
-Rules:
-- Return ONLY the title. No description, no explanation, no punctuation other than what is part of the title itself.
-- Ignore subtitles like "Special Edition", "Director's Cut", "Collector's Edition", "2-Disc Set" — return the core title only.
-- If it is a box set of a film series (e.g. "The Lord of the Rings Trilogy"), return the series name.
-- If you can see the year, return it separately.
-- If the image is unclear, partially obscured, or you are not confident, say so.
-
-Respond in this exact JSON format:
 {
-  "title": "<film title>",
-  "year": <year as integer or null>,
-  "confidence": "high" | "medium" | "low",
-  "notes": "<optional: brief note if ambiguous>"
-}`,
-            },
-          ],
-        },
-      ],
-    });
-
-    const text = response.content[0].text.trim();
-
-    let parsed;
-    try {
-      const clean = text.replace(/```json|```/g, '').trim();
-      parsed = JSON.parse(clean);
-    } catch {
-      return {
-        statusCode: 200,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: null,
-          confidence: 'low',
-          notes: 'Could not parse Vision response',
-          raw: text,
-        }),
-      };
-    }
-
-    return {
-      statusCode: 200,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(parsed),
-    };
-  } catch (err) {
-    console.error('Claude Vision error:', err);
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ error: 'Vision API failed', detail: err.message }),
-    };
+  "name": "tic-pulse",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^6.0.0"
   }
-};
+}
