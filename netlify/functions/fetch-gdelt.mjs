@@ -137,11 +137,17 @@ function decodeEntities(t) {
 
 async function storeNewArticles(supabase, articles) {
   if (!articles.length) return 0;
-  const urls = articles.map(a => a.gdelt_url);
-  const { data: existing, error: lookupErr } = await supabase.from("articles").select("gdelt_url").in("gdelt_url", urls);
-  if (lookupErr) { console.error("Lookup error:", lookupErr.message); return 0; }
-  const existingUrls = new Set((existing || []).map(r => r.gdelt_url));
-  const newArticles = articles.filter(a => !existingUrls.has(a.gdelt_url));
+  // Cap at 200 most recent to avoid overload
+  const capped = articles.slice(0, 200);
+  // Batch dedup lookups in chunks of 50 to avoid URI too large
+  const existingUrls = new Set();
+  for (let i = 0; i < capped.length; i += 50) {
+    const batch = capped.slice(i, i + 50).map(a => a.gdelt_url);
+    const { data, error } = await supabase.from("articles").select("gdelt_url").in("gdelt_url", batch);
+    if (error) { console.error("Lookup error:", error.message); continue; }
+    (data || []).forEach(r => existingUrls.add(r.gdelt_url));
+  }
+  const newArticles = capped.filter(a => !existingUrls.has(a.gdelt_url));
   if (!newArticles.length) { console.log("No new articles"); return 0; }
   let inserted = 0;
   for (let i = 0; i < newArticles.length; i += 20) {
@@ -153,7 +159,6 @@ async function storeNewArticles(supabase, articles) {
   console.log(`Stored ${inserted} new articles`);
   return inserted;
 }
-
 async function summariseArticles(supabase) {
   if (!ANTHROPIC_KEY) { console.warn("No ANTHROPIC_API_KEY"); return 0; }
   const { data: unsummarised, error } = await supabase.from("articles")
