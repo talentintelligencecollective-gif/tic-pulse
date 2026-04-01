@@ -20,7 +20,7 @@ export default function ShareSheet({ article, onClose, onToast }) {
     },
     {
       name: "LinkedIn",
-      icon: <span style={{ fontSize: "16px", fontWeight: 800, fontFamily: "Georgia, serif" }}>in</span>,
+      icon: <span style={{ fontSize: "20px", fontWeight: 800, fontFamily: "Georgia, serif", color: "#ccc" }}>in</span>,
       action: () => {
         window.open(
           `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(shareUrl)}`,
@@ -32,7 +32,7 @@ export default function ShareSheet({ article, onClose, onToast }) {
     },
     {
       name: "WhatsApp",
-      icon: <span style={{ fontSize: "18px" }}>💬</span>,
+      icon: <span style={{ fontSize: "22px" }}>💬</span>,
       action: () => {
         window.open(
           `https://wa.me/?text=${encodeURIComponent(shareText + "\n" + shareUrl)}`,
@@ -44,7 +44,7 @@ export default function ShareSheet({ article, onClose, onToast }) {
     },
     {
       name: "Email",
-      icon: <span style={{ fontSize: "18px" }}>✉️</span>,
+      icon: <span style={{ fontSize: "22px" }}>✉️</span>,
       action: () => {
         window.open(
           `mailto:?subject=${encodeURIComponent(article.title)}&body=${encodeURIComponent(shareText + "\n\n" + shareUrl)}`,
@@ -54,8 +54,8 @@ export default function ShareSheet({ article, onClose, onToast }) {
       },
     },
     {
-      name: "X / Twitter",
-      icon: <span style={{ fontSize: "16px", fontWeight: 700 }}>𝕏</span>,
+      name: "X",
+      icon: <span style={{ fontSize: "20px", fontWeight: 700, color: "#ccc" }}>𝕏</span>,
       action: () => {
         window.open(
           `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(shareUrl)}`,
@@ -100,7 +100,7 @@ export default function ShareSheet({ article, onClose, onToast }) {
             width: "36px",
             height: "4px",
             borderRadius: "2px",
-            background: "rgba(255,255,255,0.12)",
+            background: "rgba(255,255,255,0.15)",
             margin: "8px auto 20px",
           }}
         />
@@ -112,9 +112,9 @@ export default function ShareSheet({ article, onClose, onToast }) {
             gap: "14px",
             padding: "14px",
             marginBottom: "20px",
-            background: "rgba(255,255,255,0.03)",
+            background: "rgba(255,255,255,0.04)",
             borderRadius: "16px",
-            border: "1px solid var(--border)",
+            border: "1px solid #333",
           }}
         >
           {article.image_url && (
@@ -127,16 +127,16 @@ export default function ShareSheet({ article, onClose, onToast }) {
                 backgroundImage: `url(${article.image_url})`,
                 backgroundSize: "cover",
                 backgroundPosition: "center",
-                backgroundColor: "#111",
+                backgroundColor: "#222",
               }}
             />
           )}
           <div style={{ flex: 1, minWidth: 0 }}>
             <p
               style={{
-                fontSize: "13px",
+                fontSize: "14px",
                 fontWeight: 600,
-                color: "#ddd",
+                color: "#eee",
                 margin: 0,
                 lineHeight: 1.3,
                 overflow: "hidden",
@@ -144,12 +144,12 @@ export default function ShareSheet({ article, onClose, onToast }) {
                 display: "-webkit-box",
                 WebkitLineClamp: 2,
                 WebkitBoxOrient: "vertical",
-                fontFamily: "var(--font-display)",
+                fontFamily: "Georgia, serif",
               }}
             >
               {article.title}
             </p>
-            <p style={{ fontSize: "11px", color: "var(--text-muted)", margin: "4px 0 0" }}>
+            <p style={{ fontSize: "11px", color: "#999", margin: "4px 0 0" }}>
               {article.source_name} · {article.read_time_min || 4} min read
             </p>
           </div>
@@ -173,29 +173,30 @@ export default function ShareSheet({ article, onClose, onToast }) {
             >
               <div
                 style={{
-                  width: "54px",
-                  height: "54px",
+                  width: "56px",
+                  height: "56px",
                   borderRadius: "16px",
-                  background: "var(--bg-elevated)",
-                  border: "1px solid var(--border)",
+                  background: "#1e1e22",
+                  border: "1px solid #333",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
                   color: "#ccc",
+                  fontSize: "20px",
                   transition: "all 0.2s",
                 }}
                 onMouseEnter={(e) => {
-                  e.currentTarget.style.background = "var(--accent-muted)";
-                  e.currentTarget.style.borderColor = "var(--accent-border)";
+                  e.currentTarget.style.background = "rgba(0,229,160,0.1)";
+                  e.currentTarget.style.borderColor = "rgba(0,229,160,0.3)";
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "var(--bg-elevated)";
-                  e.currentTarget.style.borderColor = "var(--border)";
+                  e.currentTarget.style.background = "#1e1e22";
+                  e.currentTarget.style.borderColor = "#333";
                 }}
               >
                 {s.icon}
               </div>
-              <span style={{ fontSize: "10px", color: "var(--text-muted)", fontWeight: 500 }}>
+              <span style={{ fontSize: "10px", color: "#aaa", fontWeight: 600 }}>
                 {s.name}
               </span>
             </button>
