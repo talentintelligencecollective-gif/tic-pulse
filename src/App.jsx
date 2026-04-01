@@ -196,12 +196,7 @@ function PulseApp({ session }) {
 
     // Fallback if no tags found in recent articles
     if (sorted.length === 0) {
-      setTrendingTags([
-        { tag: "#TalentIntelligence", count: "" },
-        { tag: "#AI", count: "" },
-        { tag: "#WorkforcePlanning", count: "" },
-        { tag: "#SkillsBased", count: "" },
-      ]);
+      setTrendingTags([]);
     } else {
       setTrendingTags(sorted);
     }
@@ -865,23 +860,25 @@ function ListenView() {
         </div>
       </div>
 
-      {/* Real platform links for TIC podcast */}
-      <div style={{ display: "flex", gap: 6, marginBottom: 14, justifyContent: "center" }}>
-        {[
-          { label: "Spotify", url: "https://open.spotify.com/show/0ozE6GkCJjD6nrurugtHNh" },
-          { label: "Apple", url: "https://podcasts.apple.com/us/podcast/talent-intelligence-collective-podcast/id1533634924" },
-          { label: "YouTube", url: "https://www.youtube.com/@talentintelligencecollective" },
-        ].map(p => (
-          <a key={p.label} href={p.url} target="_blank" rel="noopener noreferrer" style={{
-            padding: "5px 12px", borderRadius: 16, fontSize: 10, fontWeight: 600,
-            background: "#111", color: "#888", border: "1px solid #222",
-            transition: "all 0.2s", textDecoration: "none", display: "inline-block",
-          }}
-            onMouseEnter={e => { e.target.style.borderColor = "#00e5a0"; e.target.style.color = "#00e5a0"; }}
-            onMouseLeave={e => { e.target.style.borderColor = "#222"; e.target.style.color = "#888"; }}
-          >{p.label} ↗</a>
-        ))}
-      </div>
+      {/* Platform links — only show for TIC or All Shows */}
+      {(!sourceFilter || sources.find(s => s.id === sourceFilter)?.name === "Talent Intelligence Collective Podcast") && (
+        <div style={{ display: "flex", gap: 6, marginBottom: 14, justifyContent: "center" }}>
+          {[
+            { label: "Spotify", url: "https://open.spotify.com/show/0ozE6GkCJjD6nrurugtHNh" },
+            { label: "Apple", url: "https://podcasts.apple.com/us/podcast/talent-intelligence-collective-podcast/id1533634924" },
+            { label: "YouTube", url: "https://www.youtube.com/@talentintelligencecollective" },
+          ].map(p => (
+            <a key={p.label} href={p.url} target="_blank" rel="noopener noreferrer" style={{
+              padding: "5px 12px", borderRadius: 16, fontSize: 10, fontWeight: 600,
+              background: "#111", color: "#888", border: "1px solid #222",
+              transition: "all 0.2s", textDecoration: "none", display: "inline-block",
+            }}
+              onMouseEnter={e => { e.target.style.borderColor = "#00e5a0"; e.target.style.color = "#00e5a0"; }}
+              onMouseLeave={e => { e.target.style.borderColor = "#222"; e.target.style.color = "#888"; }}
+            >{p.label} ↗</a>
+          ))}
+        </div>
+      )}
 
       {/* Search bar */}
       <div style={{ marginBottom: 12, padding: "0 4px" }}>
