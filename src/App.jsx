@@ -405,16 +405,16 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
               <div style={{
                 display: "flex", alignItems: "center", gap: "4px",
                 padding: "2px 7px", borderRadius: "6px",
-                background: "var(--accent-muted)", border: "1px solid rgba(0,229,160,0.15)",
+                background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.15)",
               }}>
                 <div style={{
                   width: "5px", height: "5px", borderRadius: "50%",
-                  background: "var(--accent)", animation: "liveDot 2s ease infinite",
+                  background: "#00e5a0", animation: "liveDot 2s ease infinite",
                 }} />
-                <span style={{ fontSize: "9px", fontWeight: 800, color: "var(--accent)", letterSpacing: "1px" }}>LIVE</span>
+                <span style={{ fontSize: "9px", fontWeight: 800, color: "#00e5a0", letterSpacing: "1px" }}>LIVE</span>
               </div>
             </div>
-            <div style={{ fontSize: "9px", fontWeight: 700, color: "var(--text-muted)", letterSpacing: "2px", marginTop: "-1px" }}>
+            <div style={{ fontSize: "9px", fontWeight: 700, color: "#888", letterSpacing: "2px", marginTop: "-1px" }}>
               TALENT INTELLIGENCE COLLECTIVE
             </div>
           </div>
@@ -422,20 +422,20 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
 
         <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
           <button onClick={onToggleSearch} aria-label={searchOpen ? "Close search" : "Open search"} style={{
-            background: searchOpen ? "var(--accent-muted)" : "none", border: "none",
-            color: searchOpen ? "var(--accent)" : "var(--text-muted)",
+            background: searchOpen ? "rgba(0,229,160,0.08)" : "none", border: "none",
+            color: searchOpen ? "#00e5a0" : "#888",
             padding: "8px", borderRadius: "12px", display: "flex", alignItems: "center", transition: "all 0.2s",
           }}>
             {searchOpen ? <CloseIcon size={18} /> : <SearchIcon />}
           </button>
           <button aria-label="Notifications" style={{
-            background: "none", border: "none", color: "var(--text-muted)",
+            background: "none", border: "none", color: "#888",
             padding: "8px", borderRadius: "12px", position: "relative", display: "flex", alignItems: "center",
           }}>
             <BellIcon />
             <div style={{
               position: "absolute", top: "5px", right: "5px", width: "7px", height: "7px",
-              borderRadius: "50%", background: "var(--red)", border: "2px solid var(--bg)",
+              borderRadius: "50%", background: "#ff3b5c", border: "2px solid #000",
             }} />
           </button>
           {/* User avatar */}
@@ -451,19 +451,19 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
                 <div style={{ position: "fixed", inset: 0, zIndex: 200 }} onClick={() => setShowUserMenu(false)} />
                 <div style={{
                   position: "absolute", top: "40px", right: 0,
-                  background: "#1a1a1e", border: "1px solid var(--border-hover)",
+                  background: "#1a1a1e", border: "1px solid #444",
                   borderRadius: "14px", padding: "8px", minWidth: "180px", zIndex: 201,
                   boxShadow: "0 8px 32px rgba(0,0,0,0.5)", animation: "fadeSlide 0.15s ease",
                 }}>
-                  <div style={{ padding: "10px 12px", borderBottom: "1px solid var(--border)" }}>
-                    <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-primary)" }}>
+                  <div style={{ padding: "10px 12px", borderBottom: "1px solid #333" }}>
+                    <div style={{ fontSize: "13px", fontWeight: 600, color: "#eee" }}>
                       {user?.user_metadata?.full_name || "User"}
                     </div>
-                    <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>{user?.email}</div>
+                    <div style={{ fontSize: "11px", color: "#888", marginTop: "2px" }}>{user?.email}</div>
                   </div>
                   <button onClick={() => { setShowUserMenu(false); onLogout(); }} style={{
                     width: "100%", padding: "10px 12px", background: "none", border: "none",
-                    borderRadius: "8px", color: "var(--red)", fontSize: "13px", fontWeight: 600,
+                    borderRadius: "8px", color: "#ff3b5c", fontSize: "13px", fontWeight: 600,
                     textAlign: "left", cursor: "pointer", marginTop: "4px", transition: "background 0.2s",
                   }}
                     onMouseEnter={(e) => e.currentTarget.style.background = "rgba(255,59,92,0.08)"}
@@ -481,8 +481,8 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
         <div style={{ padding: "10px 16px 0", animation: "fadeSlide 0.2s ease" }}>
           <div style={{
             display: "flex", alignItems: "center", gap: "10px",
-            background: "var(--bg-elevated)", borderRadius: "var(--radius-md)",
-            padding: "0 14px", border: "1px solid var(--border)",
+            background: "#111", borderRadius: "14px",
+            padding: "0 14px", border: "1px solid #333",
           }}>
             <SearchIcon size={16} />
             <input ref={searchInputRef} value={searchQuery} onChange={(e) => onSearchChange(e.target.value)}
@@ -508,14 +508,14 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
         }}>
           {CATEGORIES.map((cat) => {
             const isActive = activeCategory === cat;
-            const color = cat === "All" ? "var(--accent)" : (CAT_COLORS[cat] || "var(--accent)");
+            const color = cat === "All" ? "#00e5a0" : (CAT_COLORS[cat] || "#00e5a0");
             return (
               <button key={cat} onClick={() => onCategoryChange(cat)} style={{
-                padding: "5px 14px", borderRadius: "var(--radius-pill)", whiteSpace: "nowrap",
+                padding: "5px 14px", borderRadius: "20px", whiteSpace: "nowrap",
                 fontSize: "11px", fontWeight: 700, letterSpacing: "0.3px",
-                border: isActive ? `1px solid ${typeof color === "string" && color.startsWith("#") ? color + "40" : "var(--accent-border)"}` : "1px solid var(--border)",
-                background: isActive ? (typeof color === "string" && color.startsWith("#") ? color + "12" : "var(--accent-muted)") : "var(--bg-card)",
-                color: isActive ? color : "var(--text-muted)",
+                border: isActive ? `1px solid ${color}40` : "1px solid #333",
+                background: isActive ? `${color}12` : "#111",
+                color: isActive ? color : "#999",
                 transition: "all 0.25s ease",
               }}>{cat}</button>
             );
@@ -563,10 +563,10 @@ function FeedView({ articles, loading, error, searchQuery, likedIds, bookmarkedI
 
       {error && (
         <div style={{ textAlign: "center", padding: "48px 20px", animation: "fadeIn 0.3s" }}>
-          <p style={{ fontSize: "14px", color: "var(--red)", fontWeight: 500 }}>{error}</p>
+          <p style={{ fontSize: "14px", color: "#ff3b5c", fontWeight: 500 }}>{error}</p>
           <button onClick={onRetry} style={{
-            background: "var(--accent-muted)", border: "1px solid var(--accent-border)",
-            color: "var(--accent)", padding: "8px 20px", borderRadius: "12px",
+            background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.2)",
+            color: "#00e5a0", padding: "8px 20px", borderRadius: "12px",
             fontSize: "13px", fontWeight: 600, marginTop: "12px",
           }}>Try again</button>
         </div>
@@ -575,10 +575,10 @@ function FeedView({ articles, loading, error, searchQuery, likedIds, bookmarkedI
       {!loading && !error && articles.length === 0 && (
         <div style={{ textAlign: "center", padding: "60px 20px", animation: "fadeIn 0.3s" }}>
           <div style={{ fontSize: "40px", marginBottom: "12px", opacity: 0.5 }}>🔍</div>
-          <p style={{ fontSize: "15px", color: "var(--text-muted)", fontWeight: 500 }}>No articles match your filters</p>
+          <p style={{ fontSize: "15px", color: "#888", fontWeight: 500 }}>No articles match your filters</p>
           <button onClick={onClearFilters} style={{
-            background: "var(--accent-muted)", border: "1px solid var(--accent-border)",
-            color: "var(--accent)", padding: "8px 20px", borderRadius: "12px",
+            background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.2)",
+            color: "#00e5a0", padding: "8px 20px", borderRadius: "12px",
             fontSize: "13px", fontWeight: 600, marginTop: "12px",
           }}>Clear filters</button>
         </div>
@@ -937,22 +937,22 @@ function TrendingTicker({ onTagClick }) {
     <div style={{
       display: "flex", alignItems: "center", gap: "10px", padding: "10px 14px",
       marginBottom: "14px", background: "rgba(255,255,255,0.015)",
-      borderRadius: "var(--radius-md)", border: "1px solid var(--border-subtle)",
+      borderRadius: "14px", border: "1px solid #1a1a1a",
       overflowX: "auto", scrollbarWidth: "none",
     }}>
-      <div style={{ display: "flex", alignItems: "center", gap: "5px", color: "var(--accent)", flexShrink: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "5px", color: "#00e5a0", flexShrink: 0 }}>
         <TrendingIcon />
         <span style={{ fontSize: "10px", fontWeight: 800, letterSpacing: "1.2px" }}>TRENDING</span>
       </div>
-      <div style={{ width: "1px", height: "14px", background: "var(--border)", flexShrink: 0 }} />
+      <div style={{ width: "1px", height: "14px", background: "#333", flexShrink: 0 }} />
       {TRENDING_TAGS.map((t) => (
         <button key={t.tag} onClick={() => onTagClick(t.tag.slice(1))} style={{
-          background: "none", border: "none", color: "var(--text-muted)",
+          background: "none", border: "none", color: "#888",
           fontSize: "11px", fontWeight: 600, whiteSpace: "nowrap",
           padding: "3px 6px", borderRadius: "6px", transition: "all 0.2s",
         }}
-          onMouseEnter={(e) => { e.currentTarget.style.color = "var(--accent)"; e.currentTarget.style.background = "var(--accent-muted)"; }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-muted)"; e.currentTarget.style.background = "none"; }}
+          onMouseEnter={(e) => { e.currentTarget.style.color = "#00e5a0"; e.currentTarget.style.background = "rgba(0,229,160,0.08)"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.color = "#888"; e.currentTarget.style.background = "none"; }}
         >{t.tag}</button>
       ))}
     </div>
@@ -968,8 +968,8 @@ function SkeletonCards() {
     <div style={{ animation: "fadeIn 0.3s" }}>
       {[0, 1, 2].map((i) => (
         <div key={i} style={{
-          background: "var(--bg-card)", borderRadius: "var(--radius-xl)",
-          overflow: "hidden", marginBottom: "16px", border: "1px solid var(--border)",
+          background: "#111", borderRadius: "20px",
+          overflow: "hidden", marginBottom: "16px", border: "1px solid #222",
         }}>
           <div style={{ padding: "14px 18px", display: "flex", alignItems: "center", gap: "11px" }}>
             <div className="skeleton" style={{ width: "34px", height: "34px", borderRadius: "10px" }} />
@@ -1043,7 +1043,6 @@ function DiscoverView() {
   return (
     <div style={{ padding: "24px 16px 120px", animation: "fadeSlide 0.3s ease" }}>
       <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "4px" }}>
-        <img src="/tic-head.png" alt="" style={{ width: "24px", height: "24px", objectFit: "contain" }} />
         <h2 style={{ fontSize: "24px", fontWeight: 700, color: "#fff", margin: 0, fontFamily: "Georgia, serif" }}>TIC Digest</h2>
       </div>
       <p style={{ fontSize: "13px", color: "#888", margin: "0 0 24px" }}>Articles and insights from the Talent Intelligence Collective</p>
@@ -1107,8 +1106,8 @@ function SavedView({ articles, likedIds, bookmarkedIds, onLike, onBookmark, onSh
   return (
     <div style={{ padding: "24px 12px 120px", animation: "fadeSlide 0.3s ease" }}>
       <div style={{ padding: "0 4px", marginBottom: "20px" }}>
-        <h2 style={{ fontSize: "24px", fontWeight: 700, color: "#fff", margin: "0 0 6px", fontFamily: "var(--font-display)" }}>Saved</h2>
-        <p style={{ fontSize: "13px", color: "var(--text-muted)", margin: 0 }}>
+        <h2 style={{ fontSize: "24px", fontWeight: 700, color: "#fff", margin: "0 0 6px", fontFamily: "Georgia, serif" }}>Saved</h2>
+        <p style={{ fontSize: "13px", color: "#888", margin: 0 }}>
           {savedArticles.length} article{savedArticles.length !== 1 ? "s" : ""} bookmarked
         </p>
       </div>
@@ -1116,7 +1115,7 @@ function SavedView({ articles, likedIds, bookmarkedIds, onLike, onBookmark, onSh
       {savedArticles.length === 0 ? (
         <div style={{ textAlign: "center", padding: "60px 20px" }}>
           <div style={{ fontSize: "40px", marginBottom: "12px", opacity: 0.5 }}>🔖</div>
-          <p style={{ color: "var(--text-muted)", fontSize: "14px" }}>Bookmark articles to save them here</p>
+          <p style={{ color: "#888", fontSize: "14px" }}>Bookmark articles to save them here</p>
         </div>
       ) : (
         savedArticles.map((article, i) => (
