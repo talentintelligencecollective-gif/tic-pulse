@@ -373,23 +373,21 @@ function PulseApp({ session }) {
         >
           <div
             style={{
-              background: "rgba(20,20,22,0.95)",
-              backdropFilter: "blur(20px)",
-              WebkitBackdropFilter: "blur(20px)",
+              background: "#1a1a1e",
               borderRadius: "18px",
-              border: "1px solid var(--border-hover)",
+              border: "1px solid #333",
               padding: "12px 16px",
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
-              boxShadow: "0 8px 40px rgba(0,0,0,0.5)",
+              boxShadow: "0 8px 40px rgba(0,0,0,0.6)",
             }}
           >
             <div>
-              <div style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-primary)" }}>
+              <div style={{ fontSize: "14px", fontWeight: 700, color: "#fff" }}>
                 {selectedIds.length} article{selectedIds.length !== 1 ? "s" : ""} selected
               </div>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "1px" }}>
+              <div style={{ fontSize: "11px", color: "#999", marginTop: "1px" }}>
                 Ready to build your briefing
               </div>
             </div>
@@ -398,9 +396,9 @@ function PulseApp({ session }) {
                 onClick={() => setSelectedIds([])}
                 style={{
                   background: "none",
-                  border: "1px solid var(--border)",
+                  border: "1px solid #444",
                   borderRadius: "12px",
-                  color: "var(--text-muted)",
+                  color: "#ccc",
                   padding: "10px 14px",
                   fontSize: "12px",
                   fontWeight: 600,
@@ -411,7 +409,7 @@ function PulseApp({ session }) {
               <button
                 onClick={handleOpenNewsletter}
                 style={{
-                  background: "var(--accent)",
+                  background: "#00e5a0",
                   border: "none",
                   borderRadius: "12px",
                   color: "#000",
@@ -421,7 +419,6 @@ function PulseApp({ session }) {
                   display: "flex",
                   alignItems: "center",
                   gap: "6px",
-                  transition: "all 0.2s",
                 }}
               >
                 <NewsletterIcon size={16} />
