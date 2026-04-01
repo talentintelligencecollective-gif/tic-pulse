@@ -207,9 +207,9 @@ function PulseApp({ session }) {
     }
   }, [articles]);
 
-  // ─── Client-side filtering (48h freshness) ───
+  // ─── Client-side filtering (7-day freshness) ───
   const filteredArticles = useMemo(() => {
-    const freshnessCutoff = Date.now() - 48 * 60 * 60 * 1000;
+    const freshnessCutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
     return articles
       .filter((a) => {
         const pubDate = new Date(a.published_at || a.created_at).getTime();
@@ -558,12 +558,14 @@ function WatchView() {
   const [loading, setLoading] = useState(true);
   const [typeFilter, setTypeFilter] = useState("all");
   const [selected, setSelected] = useState(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [topicFilter, setTopicFilter] = useState(null);
 
   useEffect(() => {
     async function load() {
       try {
         let q = supabase.from("videos").select("*, sources(name, tier)")
-          .order("published_at", { ascending: false }).limit(200);
+          .order("published_at", { ascending: false }).limit(300);
         if (typeFilter !== "all") q = q.eq("video_type", typeFilter);
         const { data } = await q;
         setVideos(data || []);
@@ -572,6 +574,40 @@ function WatchView() {
     }
     setLoading(true); load();
   }, [typeFilter]);
+
+  // Derive top topics from video tags
+  const topTopics = useMemo(() => {
+    const counts = {};
+    for (const v of videos) {
+      for (const tag of (v.tags || [])) {
+        const clean = tag.toLowerCase().trim();
+        if (clean.length > 2) counts[clean] = (counts[clean] || 0) + 1;
+      }
+    }
+    return Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(([tag, count]) => ({ tag, count }));
+  }, [videos]);
+
+  // Client-side search + topic filter
+  const filteredVideos = useMemo(() => {
+    return videos.filter(v => {
+      if (topicFilter) {
+        const hasTopic = (v.tags || []).some(t => t.toLowerCase().trim() === topicFilter);
+        if (!hasTopic) return false;
+      }
+      if (searchQuery) {
+        const q = searchQuery.toLowerCase();
+        const inTitle = (v.title || "").toLowerCase().includes(q);
+        const inDesc = (v.description || "").toLowerCase().includes(q);
+        const inChannel = (v.channel_title || "").toLowerCase().includes(q);
+        const inTags = (v.tags || []).some(t => t.toLowerCase().includes(q));
+        return inTitle || inDesc || inChannel || inTags;
+      }
+      return true;
+    });
+  }, [videos, searchQuery, topicFilter]);
 
   if (selected) {
     return (
@@ -586,11 +622,19 @@ function WatchView() {
               <span style={{ fontSize: 11, color: "#666", marginLeft: "auto" }}>{relDate(selected.published_at)}</span>
             </div>
             <h3 style={{ fontSize: 18, fontWeight: 700, color: "#eee", margin: "0 0 10px", lineHeight: 1.3, fontFamily: "Georgia, serif" }}>{selected.title}</h3>
-            <div style={{ display: "flex", gap: 14, marginBottom: 14 }}>
+            <div style={{ display: "flex", gap: 14, marginBottom: 10 }}>
               <span style={{ fontSize: 12, color: "#888" }}>▶ {fmtViews(selected.view_count)} views</span>
               <span style={{ fontSize: 12, color: "#888" }}>⏱ {selected.duration}</span>
               {selected.channel_title && <span style={{ fontSize: 12, color: "#00e5a0" }}>{selected.channel_title}</span>}
             </div>
+            {/* Tags on detail view */}
+            {selected.tags?.length > 0 && (
+              <div style={{ display: "flex", gap: 5, marginBottom: 14, flexWrap: "wrap" }}>
+                {selected.tags.slice(0, 8).map(tag => (
+                  <span key={tag} style={{ fontSize: 10, padding: "2px 8px", borderRadius: 10, background: "#1a1a1e", color: "#888", border: "1px solid #333" }}>{tag}</span>
+                ))}
+              </div>
+            )}
             <div style={{ display: "flex", gap: 8 }}>
               <button onClick={() => setSelected(null)} style={{ padding: "8px 16px", borderRadius: 10, fontSize: 12, background: "#1a1a1e", color: "#ccc", border: "1px solid #333" }}>← Back</button>
               <a href={`https://www.youtube.com/watch?v=${selected.youtube_id}`} target="_blank" rel="noopener noreferrer" style={{ padding: "8px 16px", borderRadius: 10, fontSize: 12, fontWeight: 700, background: "#00e5a0", color: "#000", display: "inline-block", textDecoration: "none" }}>Watch on YouTube ↗</a>
@@ -603,7 +647,21 @@ function WatchView() {
 
   return (
     <div style={{ padding: "16px 12px 120px", animation: "fadeSlide 0.3s ease", background: "#000", minHeight: "calc(100vh - 120px)" }}>
-      <div style={{ display: "flex", gap: 6, marginBottom: 14, overflowX: "auto", scrollbarWidth: "none", padding: "0 4px" }}>
+      {/* Search bar */}
+      <div style={{ marginBottom: 12, padding: "0 4px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, background: "#111", borderRadius: 14, padding: "0 14px", border: "1px solid #333" }}>
+          <span style={{ fontSize: 14, color: "#666" }}>⌕</span>
+          <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+            placeholder="Search videos by topic, keyword, channel…"
+            style={{ flex: 1, background: "none", border: "none", color: "#eee", padding: "11px 0", fontSize: 13, outline: "none", fontFamily: "inherit" }} />
+          {searchQuery && (
+            <button onClick={() => setSearchQuery("")} style={{ background: "rgba(255,255,255,0.08)", border: "none", color: "#888", width: 20, height: 20, borderRadius: "50%", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
+          )}
+        </div>
+      </div>
+
+      {/* Type filter pills */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 10, overflowX: "auto", scrollbarWidth: "none", padding: "0 4px" }}>
         {["all", "podcast", "video", "short", "panel", "event"].map(t => {
           const isActive = typeFilter === t;
           const color = t === "all" ? "#00e5a0" : videoTypeColor(t);
@@ -616,16 +674,54 @@ function WatchView() {
           );
         })}
       </div>
+
+      {/* Topic pills from tags */}
+      {topTopics.length > 0 && (
+        <div style={{ display: "flex", gap: 5, marginBottom: 14, overflowX: "auto", scrollbarWidth: "none", padding: "0 4px" }}>
+          {topicFilter && (
+            <button onClick={() => setTopicFilter(null)} style={{
+              padding: "4px 10px", borderRadius: 14, fontSize: 10, fontWeight: 600,
+              background: "rgba(255,59,92,0.1)", color: "#ff3b5c", border: "1px solid rgba(255,59,92,0.3)",
+              whiteSpace: "nowrap",
+            }}>✕ Clear</button>
+          )}
+          {topTopics.map(({ tag, count }) => {
+            const isActive = topicFilter === tag;
+            return (
+              <button key={tag} onClick={() => setTopicFilter(isActive ? null : tag)} style={{
+                padding: "4px 10px", borderRadius: 14, fontSize: 10, fontWeight: 600,
+                background: isActive ? "rgba(0,229,160,0.12)" : "#0a0a0a",
+                color: isActive ? "#00e5a0" : "#777",
+                border: `1px solid ${isActive ? "rgba(0,229,160,0.3)" : "#1a1a1a"}`,
+                whiteSpace: "nowrap", transition: "all 0.2s",
+              }}>{tag} <span style={{ color: "#555", marginLeft: 2 }}>{count}</span></button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Results count when filtering */}
+      {(searchQuery || topicFilter) && !loading && (
+        <div style={{ padding: "0 8px 10px", fontSize: 11, color: "#666" }}>
+          {filteredVideos.length} video{filteredVideos.length !== 1 ? "s" : ""} found
+          {topicFilter && <span> for <span style={{ color: "#00e5a0" }}>{topicFilter}</span></span>}
+          {searchQuery && <span> matching <span style={{ color: "#00e5a0" }}>"{searchQuery}"</span></span>}
+        </div>
+      )}
+
       {loading ? (
         <div style={{ textAlign: "center", padding: 50, color: "#666", fontSize: 13 }}>Loading videos…</div>
-      ) : videos.length === 0 ? (
+      ) : filteredVideos.length === 0 ? (
         <div style={{ textAlign: "center", padding: "60px 20px" }}>
           <div style={{ fontSize: 40, marginBottom: 12, opacity: 0.5 }}>📺</div>
-          <p style={{ fontSize: 14, color: "#888" }}>No videos yet — they'll appear once the YouTube fetcher runs</p>
+          <p style={{ fontSize: 14, color: "#888" }}>{searchQuery || topicFilter ? "No videos match your search" : "No videos yet — they'll appear once the YouTube fetcher runs"}</p>
+          {(searchQuery || topicFilter) && (
+            <button onClick={() => { setSearchQuery(""); setTopicFilter(null); }} style={{ background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.2)", color: "#00e5a0", padding: "8px 20px", borderRadius: 12, fontSize: 13, fontWeight: 600, marginTop: 12 }}>Clear filters</button>
+          )}
         </div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          {videos.map((v, i) => {
+          {filteredVideos.map((v, i) => {
             const tc = videoTypeColor(v.video_type);
             const thumbUrl = v.thumbnail_url || (v.youtube_id ? `https://img.youtube.com/vi/${v.youtube_id}/hqdefault.jpg` : null);
             return (
@@ -680,7 +776,7 @@ function ListenView() {
         if (sourceFilter) q = q.eq("source_id", sourceFilter);
         const { data } = await q;
         setEpisodes(data || []);
-        const { data: srcs } = await supabase.from("sources").select("*").eq("type", "podcast").eq("active", true).order("tier");
+        const { data: srcs } = await supabase.from("sources").select("*").eq("type", "podcast").eq("active", true).not("rss_url", "is", null).order("tier");
         setSources(srcs || []);
       } catch { setEpisodes([]); setSources([]); }
       setLoading(false);
