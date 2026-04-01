@@ -1144,7 +1144,7 @@ function CommunityView() {
 function BottomNav({ activeTab, onTabChange }) {
   const tabs = [
     { id: "feed", label: "Feed", Icon: FeedIcon },
-    { id: "discover", label: "Discover", Icon: DiscoverIcon },
+    { id: "discover", label: "TIC", Icon: DiscoverIcon },
     { id: "saved", label: "Saved", Icon: () => <BookmarkIcon filled={false} size={22} /> },
     { id: "community", label: "Community", Icon: PeopleIcon },
   ];
