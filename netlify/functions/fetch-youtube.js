@@ -28,25 +28,40 @@ async function getUploadsPlaylist(channelId) {
   return data.items[0].contentDetails.relatedPlaylists.uploads;
 }
 
-// Get recent videos from a playlist
-async function getPlaylistItems(playlistId, maxResults = 25) {
-  const url = `${YT_BASE}/playlistItems?part=snippet,contentDetails&playlistId=${playlistId}&maxResults=${maxResults}&key=${YT_API_KEY}`;
-  const res = await fetch(url);
-  const data = await res.json();
+// Get ALL videos from a playlist (paginates through entire history)
+async function getPlaylistItems(playlistId) {
+  const allItems = [];
+  let pageToken = null;
 
-  if (!data.items) return [];
-  return data.items.map((item) => ({
-    videoId: item.contentDetails.videoId,
-    title: item.snippet.title,
-    description: item.snippet.description,
-    publishedAt: item.snippet.publishedAt,
-    channelTitle: item.snippet.channelTitle,
-    thumbnail:
-      item.snippet.thumbnails?.maxres?.url ||
-      item.snippet.thumbnails?.high?.url ||
-      item.snippet.thumbnails?.medium?.url ||
-      item.snippet.thumbnails?.default?.url,
-  }));
+  do {
+    let url = `${YT_BASE}/playlistItems?part=snippet,contentDetails&playlistId=${playlistId}&maxResults=50&key=${YT_API_KEY}`;
+    if (pageToken) url += `&pageToken=${pageToken}`;
+
+    const res = await fetch(url);
+    const data = await res.json();
+
+    if (!data.items) break;
+
+    for (const item of data.items) {
+      allItems.push({
+        videoId: item.contentDetails.videoId,
+        title: item.snippet.title,
+        description: item.snippet.description,
+        publishedAt: item.snippet.publishedAt,
+        channelTitle: item.snippet.channelTitle,
+        thumbnail:
+          item.snippet.thumbnails?.maxres?.url ||
+          item.snippet.thumbnails?.high?.url ||
+          item.snippet.thumbnails?.medium?.url ||
+          item.snippet.thumbnails?.default?.url,
+      });
+    }
+
+    pageToken = data.nextPageToken || null;
+    console.log(`[fetch-youtube] Fetched page, ${allItems.length} videos so far...`);
+  } while (pageToken);
+
+  return allItems;
 }
 
 // Get video details (duration, stats) for a batch of video IDs
@@ -61,7 +76,7 @@ async function getVideoDetails(videoIds) {
 
   const details = {};
   for (const chunk of chunks) {
-    const url = `${YT_BASE}/videos?part=contentDetails,statistics&id=${chunk.join(",")}&key=${YT_API_KEY}`;
+    const url = `${YT_BASE}/videos?part=contentDetails,statistics,snippet&id=${chunk.join(",")}&key=${YT_API_KEY}`;
     const res = await fetch(url);
     const data = await res.json();
 
@@ -72,6 +87,7 @@ async function getVideoDetails(videoIds) {
           viewCount: parseInt(item.statistics.viewCount || 0),
           likeCount: parseInt(item.statistics.likeCount || 0),
           commentCount: parseInt(item.statistics.commentCount || 0),
+          tags: item.snippet.tags || [],
         };
       }
     }
@@ -206,7 +222,7 @@ export default async function handler(req) {
         }
 
         // Fetch recent videos
-        const videos = await getPlaylistItems(playlistId, 25);
+        const videos = await getPlaylistItems(playlistId);
         console.log(`[fetch-youtube] ${source.name}: found ${videos.length} videos`);
 
         // Filter out already-stored videos
@@ -278,6 +294,7 @@ export default async function handler(req) {
             like_count: detail.likeCount || 0,
             comment_count: detail.commentCount || 0,
             video_type: videoType,
+            tags: detail.tags || [],
             keyword_matches: video._keywordMatches || [],
             keyword_score: video._keywordScore || 0,
           });
