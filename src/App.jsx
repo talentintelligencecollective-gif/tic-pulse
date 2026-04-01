@@ -718,9 +718,9 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
                 fontSize: "11px",
                 fontWeight: 700,
                 letterSpacing: "0.3px",
-                border: isActive ? `1px solid ${typeof color === "string" && color.startsWith("#") ? color + "40" : "var(--accent-border)"}` : "1px solid var(--border)",
-                background: isActive ? (typeof color === "string" && color.startsWith("#") ? color + "12" : "var(--accent-muted)") : "var(--bg-card)",
-                color: isActive ? color : "var(--text-muted)",
+           border: isActive ? `1px solid ${typeof color === "string" && color.startsWith("#") ? color + "40" : "rgba(0,229,160,0.25)"}` : "1px solid #333",
+                background: isActive ? (typeof color === "string" && color.startsWith("#") ? color + "12" : "rgba(0,229,160,0.12)") : "#111",
+                color: isActive ? color : "#aaa",
                 transition: "all 0.25s ease",
               }}
             >
