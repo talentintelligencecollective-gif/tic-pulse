@@ -277,7 +277,6 @@ function PulseApp({ session }) {
         maxWidth: "480px",
         margin: "0 auto",
         position: "relative",
-        overflowX: "hidden",
       }}
     >
       {/* Ambient glow */}
@@ -309,7 +308,7 @@ function PulseApp({ session }) {
           if (searchOpen) setSearchQuery("");
         }}
         onSearchChange={setSearchQuery}
-        onCategoryChange={(cat) => setActiveCategory(cat)}
+        onCategoryChange={(cat) => { setActiveCategory(cat); setSearchQuery(""); setSearchOpen(false); }}
       />
 
       {/* ═══ CONTENT ═══ */}
@@ -319,6 +318,7 @@ function PulseApp({ session }) {
             articles={filteredArticles}
             loading={loading}
             error={error}
+            searchQuery={searchQuery}
             likedIds={likedIds}
             bookmarkedIds={bookmarkedIds}
             selectedIds={selectedIdSet}
@@ -329,6 +329,7 @@ function PulseApp({ session }) {
             onClearFilters={() => {
               setActiveCategory("All");
               setSearchQuery("");
+              setSearchOpen(false);
             }}
             onSearchTag={(tag) => {
               setSearchQuery(tag);
@@ -461,10 +462,8 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
         position: "sticky",
         top: 0,
         zIndex: 100,
-        background: "var(--bg-glass)",
-        backdropFilter: "blur(24px) saturate(1.8)",
-        WebkitBackdropFilter: "blur(24px) saturate(1.8)",
-        borderBottom: "1px solid var(--border)",
+        background: "#000",
+        borderBottom: "1px solid #222",
       }}
     >
       {/* Top Row */}
@@ -738,12 +737,32 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
 //  FEED VIEW
 // ═══════════════════════════════════════════════
 
-function FeedView({ articles, loading, error, likedIds, bookmarkedIds, selectedIds, onLike, onBookmark, onShare, onToggleSelect, onClearFilters, onSearchTag, onRetry }) {
+function FeedView({ articles, loading, error, searchQuery, likedIds, bookmarkedIds, selectedIds, onLike, onBookmark, onShare, onToggleSelect, onClearFilters, onSearchTag, onRetry }) {
   const hasSelections = selectedIds.size > 0;
   return (
     <div style={{ padding: hasSelections ? "12px 12px 180px" : "12px 12px 110px" }}>
       {/* Trending Ticker */}
       <TrendingTicker onTagClick={onSearchTag} />
+
+      {/* Active filter chip */}
+      {searchQuery && (
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          padding: "10px 14px", marginBottom: "12px", borderRadius: "12px",
+          background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.2)",
+          animation: "fadeSlide 0.2s ease",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <span style={{ fontSize: "12px", color: "#888" }}>Filtering by:</span>
+            <span style={{ fontSize: "13px", fontWeight: 700, color: "#00e5a0" }}>{searchQuery}</span>
+          </div>
+          <button onClick={onClearFilters} style={{
+            background: "rgba(255,255,255,0.1)", border: "none", borderRadius: "8px",
+            color: "#fff", padding: "4px 12px", fontSize: "12px", fontWeight: 600,
+            cursor: "pointer",
+          }}>Clear</button>
+        </div>
+      )}
 
       {/* Loading */}
       {loading && articles.length === 0 && <SkeletonCards />}
@@ -994,52 +1013,34 @@ function DiscoverView() {
           target="_blank"
           rel="noopener noreferrer"
           style={{
-            display: "block", textDecoration: "none", marginBottom: "16px",
-            background: "#0a0a0a", borderRadius: "16px", border: "1px solid #1a1a1a",
-            overflow: "hidden", transition: "border-color 0.2s",
-            animation: `cardIn 0.4s ease ${i * 0.05}s both`,
+            display: "block", textDecoration: "none", marginBottom: "10px",
+            padding: "14px 16px", background: "#0a0a0a", borderRadius: "14px",
+            border: "1px solid #1a1a1a", transition: "border-color 0.2s",
+            animation: `cardIn 0.3s ease ${i * 0.03}s both`,
           }}
           onMouseEnter={(e) => e.currentTarget.style.borderColor = "#333"}
           onMouseLeave={(e) => e.currentTarget.style.borderColor = "#1a1a1a"}
         >
-          {/* Cover image */}
-          {article.image && (
-            <div style={{
-              width: "100%", height: "180px",
-              backgroundImage: `url(${article.image})`,
-              backgroundSize: "cover", backgroundPosition: "center",
-              backgroundColor: "#111",
-            }} />
-          )}
-          {/* Content */}
-          <div style={{ padding: "16px 18px 18px" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
-              <span style={{
-                fontSize: "10px", fontWeight: 700, color: "#00e5a0",
-                letterSpacing: "1.5px", textTransform: "uppercase",
-              }}>TIC Digest</span>
-              {article.publishedAt && (
-                <>
-                  <span style={{ color: "#333" }}>·</span>
-                  <span style={{ fontSize: "11px", color: "#666" }}>{formatDate(article.publishedAt)}</span>
-                </>
-              )}
-            </div>
-            <h3 style={{
-              fontSize: "17px", fontWeight: 700, color: "#eee", margin: "0 0 8px",
-              lineHeight: 1.3, fontFamily: "Georgia, serif",
-            }}>{article.title}</h3>
-            {article.description && (
-              <p style={{
-                fontSize: "13px", lineHeight: 1.6, color: "#888", margin: 0,
-                overflow: "hidden", textOverflow: "ellipsis",
-                display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical",
-              }}>{article.description}</p>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}>
+            <span style={{ fontSize: "10px", fontWeight: 700, color: "#00e5a0", letterSpacing: "1px" }}>TIC</span>
+            {article.publishedAt && (
+              <>
+                <span style={{ color: "#333" }}>·</span>
+                <span style={{ fontSize: "11px", color: "#666" }}>{formatDate(article.publishedAt)}</span>
+              </>
             )}
-            <div style={{
-              marginTop: "12px", fontSize: "12px", fontWeight: 600, color: "#00e5a0",
-            }}>Read on Substack →</div>
           </div>
+          <h3 style={{
+            fontSize: "15px", fontWeight: 700, color: "#eee", margin: "0 0 4px",
+            lineHeight: 1.3, fontFamily: "Georgia, serif",
+          }}>{article.title}</h3>
+          {article.description && (
+            <p style={{
+              fontSize: "12px", lineHeight: 1.5, color: "#777", margin: 0,
+              overflow: "hidden", textOverflow: "ellipsis",
+              display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
+            }}>{article.description}</p>
+          )}
         </a>
       ))}
 
@@ -1159,10 +1160,8 @@ function BottomNav({ activeTab, onTabChange }) {
         width: "100%",
         maxWidth: "480px",
         zIndex: 100,
-        background: "var(--bg-glass)",
-        backdropFilter: "blur(24px) saturate(1.8)",
-        WebkitBackdropFilter: "blur(24px) saturate(1.8)",
-        borderTop: "1px solid var(--border)",
+        background: "#000",
+        borderTop: "1px solid #222",
         display: "flex",
         justifyContent: "space-around",
         padding: "8px 0 env(safe-area-inset-bottom, 20px)",
@@ -1182,7 +1181,7 @@ function BottomNav({ activeTab, onTabChange }) {
               flexDirection: "column",
               alignItems: "center",
               gap: "3px",
-              color: isActive ? "var(--accent)" : "var(--text-faint)",
+              color: isActive ? "#00e5a0" : "#888",
               transition: "color 0.2s",
               padding: "6px 12px",
               position: "relative",
@@ -1198,7 +1197,7 @@ function BottomNav({ activeTab, onTabChange }) {
                   width: "20px",
                   height: "2px",
                   borderRadius: "1px",
-                  background: "var(--accent)",
+                  background: "#00e5a0",
                 }}
               />
             )}
