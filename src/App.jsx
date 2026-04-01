@@ -767,12 +767,16 @@ function ListenView() {
   const [sourceFilter, setSourceFilter] = useState(null);
   const [playing, setPlaying] = useState(null);
   const [expanded, setExpanded] = useState(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [progress, setProgress] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const audioRef = useRef(null);
 
   useEffect(() => {
     async function load() {
       try {
         let q = supabase.from("episodes").select("*, sources(name, host, tier)")
-          .order("published_at", { ascending: false }).limit(80);
+          .order("published_at", { ascending: false }).limit(100);
         if (sourceFilter) q = q.eq("source_id", sourceFilter);
         const { data } = await q;
         setEpisodes(data || []);
@@ -784,19 +788,115 @@ function ListenView() {
     setLoading(true); load();
   }, [sourceFilter]);
 
+  // Real audio playback
+  const handlePlay = useCallback((ep) => {
+    if (playing === ep.id) {
+      // Pause
+      audioRef.current?.pause();
+      setPlaying(null);
+      return;
+    }
+    // Stop current
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
+
+    if (!ep.audio_url) {
+      // No audio URL — open the episode link instead
+      if (ep.link) window.open(ep.link, "_blank");
+      return;
+    }
+
+    const audio = new Audio(ep.audio_url);
+    audioRef.current = audio;
+    setPlaying(ep.id);
+    setProgress(0);
+    setDuration(0);
+
+    audio.addEventListener("loadedmetadata", () => setDuration(audio.duration));
+    audio.addEventListener("timeupdate", () => {
+      if (audio.duration) setProgress((audio.currentTime / audio.duration) * 100);
+    });
+    audio.addEventListener("ended", () => { setPlaying(null); setProgress(0); });
+    audio.addEventListener("error", () => {
+      // Fallback: open in browser if audio won't play
+      setPlaying(null);
+      if (ep.link) window.open(ep.link, "_blank");
+    });
+    audio.play().catch(() => {
+      setPlaying(null);
+      if (ep.link) window.open(ep.link, "_blank");
+    });
+  }, [playing]);
+
+  // Cleanup audio on unmount
+  useEffect(() => {
+    return () => { if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; } };
+  }, []);
+
+  // Search filter
+  const filteredEpisodes = useMemo(() => {
+    if (!searchQuery) return episodes;
+    const q = searchQuery.toLowerCase();
+    return episodes.filter(ep =>
+      (ep.title || "").toLowerCase().includes(q) ||
+      (ep.guest_name || "").toLowerCase().includes(q) ||
+      (ep.description || "").toLowerCase().includes(q) ||
+      (ep.sources?.name || "").toLowerCase().includes(q)
+    );
+  }, [episodes, searchQuery]);
+
+  // Format seconds to mm:ss
+  const fmtTime = (s) => {
+    if (!s || isNaN(s)) return "0:00";
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    return `${m}:${sec < 10 ? "0" : ""}${sec}`;
+  };
+
   return (
     <div style={{ padding: "16px 12px 120px", animation: "fadeSlide 0.3s ease", background: "#000", minHeight: "calc(100vh - 120px)" }}>
+      {/* Header */}
       <div style={{ display: "flex", gap: 14, alignItems: "center", padding: "14px 16px", background: "#111", borderRadius: 16, border: "1px solid #222", marginBottom: 14 }}>
         <div style={{ width: 56, height: 56, borderRadius: 12, flexShrink: 0, background: "linear-gradient(135deg, rgba(0,229,160,0.1), rgba(0,180,216,0.1))", border: "1px solid rgba(0,229,160,0.2)", display: "flex", alignItems: "center", justifyContent: "center" }}>
           <img src="/tic-head.png" alt="TIC" style={{ width: 34, height: 34, objectFit: "contain" }} />
         </div>
         <div>
-          <h2 style={{ fontSize: 18, fontWeight: 700, color: "#fff", margin: "0 0 2px", fontFamily: "Georgia, serif" }}>TIC Podcast</h2>
-          <div style={{ fontSize: 12, color: "#888" }}>Toby Culshaw · Alison Ettridge · Alan Walker</div>
-          <div style={{ fontSize: 11, color: "#00e5a0", marginTop: 2 }}>{episodes.length} episodes</div>
+          <h2 style={{ fontSize: 18, fontWeight: 700, color: "#fff", margin: "0 0 2px", fontFamily: "Georgia, serif" }}>TIC Podcast Network</h2>
+          <div style={{ fontSize: 12, color: "#888" }}>{sources.length} shows · {episodes.length} episodes</div>
         </div>
       </div>
 
+      {/* Real platform links for TIC podcast */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 14, justifyContent: "center" }}>
+        {[
+          { label: "Spotify", url: "https://open.spotify.com/show/0ozE6GkCJjD6nrurugtHNh" },
+          { label: "Apple", url: "https://podcasts.apple.com/us/podcast/talent-intelligence-collective-podcast/id1533634924" },
+          { label: "YouTube", url: "https://www.youtube.com/@talentintelligencecollective" },
+        ].map(p => (
+          <a key={p.label} href={p.url} target="_blank" rel="noopener noreferrer" style={{
+            padding: "5px 12px", borderRadius: 16, fontSize: 10, fontWeight: 600,
+            background: "#111", color: "#888", border: "1px solid #222",
+            transition: "all 0.2s", textDecoration: "none", display: "inline-block",
+          }}
+            onMouseEnter={e => { e.target.style.borderColor = "#00e5a0"; e.target.style.color = "#00e5a0"; }}
+            onMouseLeave={e => { e.target.style.borderColor = "#222"; e.target.style.color = "#888"; }}
+          >{p.label} ↗</a>
+        ))}
+      </div>
+
+      {/* Search bar */}
+      <div style={{ marginBottom: 12, padding: "0 4px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, background: "#111", borderRadius: 14, padding: "0 14px", border: "1px solid #333" }}>
+          <span style={{ fontSize: 14, color: "#666" }}>⌕</span>
+          <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+            placeholder="Search episodes, guests, topics…"
+            style={{ flex: 1, background: "none", border: "none", color: "#eee", padding: "11px 0", fontSize: 13, outline: "none", fontFamily: "inherit" }} />
+          {searchQuery && (
+            <button onClick={() => setSearchQuery("")} style={{ background: "rgba(255,255,255,0.08)", border: "none", color: "#888", width: 20, height: 20, borderRadius: "50%", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
+          )}
+        </div>
+      </div>
+
+      {/* Source filter */}
       {sources.length > 1 && (
         <div style={{ display: "flex", gap: 6, marginBottom: 14, overflowX: "auto", scrollbarWidth: "none", padding: "0 4px" }}>
           <button onClick={() => setSourceFilter(null)} style={{ padding: "5px 14px", borderRadius: 20, fontSize: 11, fontWeight: 700, background: !sourceFilter ? "rgba(0,229,160,0.12)" : "#111", color: !sourceFilter ? "#00e5a0" : "#888", border: `1px solid ${!sourceFilter ? "rgba(0,229,160,0.3)" : "#222"}`, whiteSpace: "nowrap" }}>All Shows</button>
@@ -807,36 +907,71 @@ function ListenView() {
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 6, marginBottom: 16, justifyContent: "center" }}>
-        {["Spotify", "Apple Podcasts", "YouTube", "RSS"].map(p => (
-          <button key={p} style={{ padding: "5px 10px", borderRadius: 16, fontSize: 10, fontWeight: 600, background: "#111", color: "#888", border: "1px solid #222", transition: "all 0.2s" }}
-            onMouseEnter={e => { e.target.style.borderColor = "#00e5a0"; e.target.style.color = "#00e5a0"; }}
-            onMouseLeave={e => { e.target.style.borderColor = "#222"; e.target.style.color = "#888"; }}
-          >{p}</button>
-        ))}
-      </div>
+      {/* Now Playing bar */}
+      {playing && (
+        <div style={{ marginBottom: 12, padding: "10px 14px", background: "#111", borderRadius: 12, border: "1px solid #00e5a0", animation: "fadeSlide 0.2s ease" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+            <button onClick={() => { audioRef.current?.pause(); setPlaying(null); setProgress(0); }} style={{
+              width: 28, height: 28, borderRadius: "50%", background: "#00e5a0", border: "none",
+              display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+            }}>
+              <div style={{ display: "flex", gap: 2 }}>
+                <div style={{ width: 2.5, height: 10, background: "#000", borderRadius: 1 }} />
+                <div style={{ width: 2.5, height: 10, background: "#000", borderRadius: 1 }} />
+              </div>
+            </button>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#eee", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                {episodes.find(e => e.id === playing)?.title || "Playing…"}
+              </div>
+              <div style={{ fontSize: 10, color: "#666" }}>
+                {fmtTime(duration * progress / 100)} / {fmtTime(duration)}
+              </div>
+            </div>
+          </div>
+          {/* Progress bar */}
+          <div style={{ height: 3, background: "#222", borderRadius: 2, overflow: "hidden", cursor: "pointer" }}
+            onClick={(e) => {
+              if (!audioRef.current || !duration) return;
+              const rect = e.currentTarget.getBoundingClientRect();
+              const pct = (e.clientX - rect.left) / rect.width;
+              audioRef.current.currentTime = pct * duration;
+            }}
+          >
+            <div style={{ height: "100%", width: `${progress}%`, background: "#00e5a0", borderRadius: 2, transition: "width 0.3s linear" }} />
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <div style={{ textAlign: "center", padding: 50, color: "#666", fontSize: 13 }}>Loading episodes…</div>
-      ) : episodes.length === 0 ? (
+      ) : filteredEpisodes.length === 0 ? (
         <div style={{ textAlign: "center", padding: "60px 20px" }}>
           <div style={{ fontSize: 40, marginBottom: 12, opacity: 0.5 }}>🎧</div>
-          <p style={{ fontSize: 14, color: "#888" }}>No episodes yet — they'll appear once the RSS fetcher runs</p>
+          <p style={{ fontSize: 14, color: "#888" }}>{searchQuery ? "No episodes match your search" : "No episodes yet"}</p>
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {episodes.map((ep, i) => {
+          {filteredEpisodes.map((ep, i) => {
             const isPlay = playing === ep.id;
             const isExp = expanded === ep.id;
+            const hasAudio = !!ep.audio_url;
             return (
               <div key={ep.id} style={{ background: "#111", borderRadius: 14, overflow: "hidden", border: `1px solid ${isPlay ? "#00e5a0" : "#222"}`, transition: "border-color 0.3s", animation: `cardIn 0.3s ease ${i * 0.03}s both` }}>
+                {/* Playing progress indicator */}
+                {isPlay && <div style={{ height: 2, background: "#222" }}><div style={{ height: "100%", width: `${progress}%`, background: "#00e5a0", transition: "width 0.3s linear" }} /></div>}
                 <div style={{ padding: "14px 16px" }}>
                   <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
-                    <button onClick={() => setPlaying(isPlay ? null : ep.id)} style={{ width: 40, height: 40, borderRadius: "50%", flexShrink: 0, background: isPlay ? "#00e5a0" : "#1a1a1e", display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.2s", marginTop: 2, border: "none" }}>
+                    <button onClick={() => handlePlay(ep)} title={hasAudio ? (isPlay ? "Pause" : "Play") : "Open episode"} style={{
+                      width: 40, height: 40, borderRadius: "50%", flexShrink: 0,
+                      background: isPlay ? "#00e5a0" : "#1a1a1e",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      transition: "all 0.2s", marginTop: 2, border: "none",
+                    }}>
                       {isPlay ? (
                         <div style={{ display: "flex", gap: 3 }}><div style={{ width: 3, height: 14, background: "#000", borderRadius: 1 }} /><div style={{ width: 3, height: 14, background: "#000", borderRadius: 1 }} /></div>
                       ) : (
-                        <div style={{ width: 0, height: 0, borderLeft: "10px solid #eee", borderTop: "7px solid transparent", borderBottom: "7px solid transparent", marginLeft: 2 }} />
+                        <div style={{ width: 0, height: 0, borderLeft: `10px solid ${hasAudio ? "#eee" : "#666"}`, borderTop: "7px solid transparent", borderBottom: "7px solid transparent", marginLeft: 2 }} />
                       )}
                     </button>
                     <div style={{ flex: 1, minWidth: 0 }}>
@@ -854,8 +989,9 @@ function ListenView() {
                       {isExp && ep.description && (
                         <div style={{ marginTop: 8, marginBottom: 8, fontSize: 13, color: "#999", lineHeight: 1.6, padding: "10px 12px", background: "#0a0a0a", borderRadius: 10, animation: "fadeSlide 0.2s ease" }}>{ep.description}</div>
                       )}
-                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                         {ep.duration && <span style={{ fontSize: 10, color: "#666" }}>⏱ {ep.duration}</span>}
+                        {!hasAudio && ep.link && <a href={ep.link} target="_blank" rel="noopener noreferrer" style={{ fontSize: 10, color: "#00e5a0", textDecoration: "none" }}>Open ↗</a>}
                         <button onClick={() => setExpanded(isExp ? null : ep.id)} style={{ fontSize: 11, color: "#00e5a0", marginLeft: "auto", background: "none", border: "none" }}>{isExp ? "Less ↑" : "More ↓"}</button>
                       </div>
                     </div>
