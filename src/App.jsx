@@ -511,7 +511,7 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
                 </span>
               </div>
             </div>
-            <div style={{ fontSize: "9px", fontWeight: 700, color: "var(--text-muted)", letterSpacing: "2px", marginTop: "-1px" }}>
+            <div style={{ fontSize: "9px", fontWeight: 700, color: "#666", letterSpacing: "2px", marginTop: "-1px" }}>
               TALENT INTELLIGENCE COLLECTIVE
             </div>
           </div>
@@ -524,7 +524,7 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
             style={{
               background: searchOpen ? "var(--accent-muted)" : "none",
               border: "none",
-              color: searchOpen ? "var(--accent)" : "var(--text-muted)",
+            color: searchOpen ? "#00e5a0" : "#888",
               padding: "8px",
               borderRadius: "12px",
               display: "flex",
@@ -539,7 +539,7 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
             style={{
               background: "none",
               border: "none",
-              color: "var(--text-muted)",
+              color: "#888",
               padding: "8px",
               borderRadius: "12px",
               position: "relative",
@@ -557,7 +557,7 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
                 height: "7px",
                 borderRadius: "50%",
                 background: "var(--red)",
-                border: "2px solid var(--bg)",
+                border: "2px solid #000",
               }}
             />
           </button>
@@ -774,9 +774,9 @@ function FeedView({ articles, loading, error, searchQuery, likedIds, bookmarkedI
           <button
             onClick={onRetry}
             style={{
-              background: "var(--accent-muted)",
-              border: "1px solid var(--accent-border)",
-              color: "var(--accent)",
+              background: "rgba(0,229,160,0.12)",
+border: "1px solid rgba(0,229,160,0.2)",
+color: "#00e5a0",
               padding: "8px 20px",
               borderRadius: "12px",
               fontSize: "13px",
