@@ -72,11 +72,6 @@ export default function NewsletterBuilder({ articles, mediaItems = [], onClose, 
 
   // ─── Derive user info from session ───
   const userName = session?.user?.user_metadata?.full_name || "";
-  const userCompany = (() => {
-    // Company might be in profile metadata or we need to fetch it
-    // For now, try user_metadata first, then fall back
-    return session?.user?.user_metadata?.company || "";
-  })();
 
   // ─── Load preferences + brand guidelines on mount ───
   useEffect(() => {
@@ -86,16 +81,16 @@ export default function NewsletterBuilder({ articles, mediaItems = [], onClose, 
       // 1. Load saved preferences
       const prefs = await loadUserPreferences(userId);
 
-      // 2. Load company from profile
-      let company = userCompany;
-      if (!company) {
+      // 2. Load company from profiles table (company is NOT in user_metadata)
+      let company = "";
+      try {
         const { data: profile } = await supabase
           .from("profiles")
           .select("company, full_name")
           .eq("id", userId)
           .single();
         if (profile) company = profile.company || "";
-      }
+      } catch {}
 
       if (prefs) {
         // Restore saved preferences
