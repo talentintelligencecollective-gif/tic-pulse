@@ -7,6 +7,8 @@
 //  - MSO conditionals for Outlook
 //  - Max-width 600px (email standard)
 //  - Web-safe font stacks
+//
+//  Phase 3: Added media items (videos + podcasts) support
 // ═══════════════════════════════════════════════════════════════
 
 /**
@@ -142,15 +144,17 @@ function esc(str) {
  *
  * @param {Object} options
  * @param {Array} options.articles - Selected articles
+ * @param {Array} [options.mediaItems] - Selected videos/episodes
  * @param {Object} options.theme - Theme object from NEWSLETTER_THEMES
  * @param {string} [options.introText] - Optional personal intro paragraph
  * @param {string} [options.senderName] - Name of the person sending
- * @param {string} [options.newsletterTitle] - Custom title (default: "Talent Intelligence Briefing")
+ * @param {string} [options.newsletterTitle] - Custom title
  * @param {string} [options.dateStr] - Date string for the header
  * @returns {string} Complete HTML document string
  */
 export function generateNewsletterHtml({
   articles,
+  mediaItems = [],
   theme,
   introText = "",
   senderName = "",
@@ -228,6 +232,9 @@ export function generateNewsletterHtml({
     })
     .join("\n");
 
+  // Build media rows (videos + episodes)
+  const mediaRows = mediaItems.length > 0 ? buildMediaSection(mediaItems, t) : "";
+
   // Intro section
   const introSection = introText.trim()
     ? `
@@ -250,6 +257,8 @@ export function generateNewsletterHtml({
     </tr>`
     : "";
 
+  const totalItems = articles.length + mediaItems.length;
+
   // Full HTML document
   return `<!DOCTYPE html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
@@ -269,7 +278,6 @@ export function generateNewsletterHtml({
   </noscript>
   <![endif]-->
   <style>
-    /* Reset for email clients that DO support style blocks */
     body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
     table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
     img { -ms-interpolation-mode: bicubic; border: 0; height: auto; line-height: 100%; outline: none; text-decoration: none; }
@@ -286,7 +294,7 @@ export function generateNewsletterHtml({
 <body style="margin: 0; padding: 0; background-color: ${t.bg}; font-family: ${t.bodyFontStack};">
   <!-- Preheader text (hidden, shows in email previews) -->
   <div style="display: none; max-height: 0; overflow: hidden; font-size: 1px; line-height: 1px; color: ${t.bg};">
-    ${esc(newsletterTitle)} — ${articles.length} curated articles for ${today}
+    ${esc(newsletterTitle)} — ${totalItems} curated item${totalItems !== 1 ? "s" : ""} for ${today}
   </div>
 
   <!-- Full-width wrapper -->
@@ -304,7 +312,7 @@ export function generateNewsletterHtml({
                 <tr>
                   <td>
                     <h1 style="font-family: ${t.fontStack}; font-size: 28px; font-weight: 700; color: #ffffff; margin: 0 0 4px 0; letter-spacing: -0.5px;">${esc(newsletterTitle)}</h1>
-                    <p style="font-family: ${t.bodyFontStack}; font-size: 13px; color: rgba(255,255,255,0.5); margin: 0; letter-spacing: 0.5px;">${today} &middot; ${articles.length} article${articles.length !== 1 ? "s" : ""}</p>
+                    <p style="font-family: ${t.bodyFontStack}; font-size: 13px; color: rgba(255,255,255,0.5); margin: 0; letter-spacing: 0.5px;">${today} &middot; ${totalItems} item${totalItems !== 1 ? "s" : ""}</p>
                   </td>
                   <td align="right" valign="top" style="padding-top: 4px;">
                     <span style="display: inline-block; padding: 4px 12px; border-radius: 8px; background-color: ${t.accent}; color: ${accentText}; font-family: ${t.bodyFontStack}; font-size: 11px; font-weight: 700; letter-spacing: 1px;">PULSE</span>
@@ -320,6 +328,7 @@ export function generateNewsletterHtml({
               <table width="100%" cellpadding="0" cellspacing="0" border="0">
                 ${introSection}
                 ${articleRows}
+                ${mediaRows}
                 ${signOff}
               </table>
             </td>
@@ -350,6 +359,90 @@ export function generateNewsletterHtml({
 </html>`;
 }
 
+// ─── Media Section Builder ───
+
+function buildMediaSection(mediaItems, t) {
+  const videos = mediaItems.filter((m) => m._mediaType === "video");
+  const episodes = mediaItems.filter((m) => m._mediaType === "episode");
+
+  let html = "";
+
+  if (videos.length > 0) {
+    html += `
+    <!-- ═══ WATCH ═══ -->
+    <tr>
+      <td style="padding: 20px 0 16px 0;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0">
+          <tr>
+            <td style="font-family: ${t.bodyFontStack}; font-size: 11px; font-weight: 700; color: ${t.textMuted}; letter-spacing: 1.5px; text-transform: uppercase; padding-bottom: 12px; border-bottom: 1px solid ${t.border};">▶ WATCH</td>
+          </tr>
+        </table>
+      </td>
+    </tr>`;
+
+    for (const v of videos) {
+      const thumbUrl = v.thumbnail_url || (v.youtube_id ? `https://img.youtube.com/vi/${v.youtube_id}/hqdefault.jpg` : "");
+      const videoUrl = v.youtube_id ? `https://www.youtube.com/watch?v=${v.youtube_id}` : "#";
+      html += `
+    <tr>
+      <td style="padding: 0 0 16px 0;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: ${t.cardBg}; border: 1px solid ${t.border}; border-radius: 12px; overflow: hidden;">
+          ${thumbUrl ? `<tr><td style="padding: 0; line-height: 0;"><a href="${esc(videoUrl)}" target="_blank" style="text-decoration: none;"><img src="${esc(thumbUrl)}" alt="" width="600" style="width: 100%; max-width: 600px; height: auto; display: block; border: 0;" /></a></td></tr>` : ""}
+          <tr>
+            <td style="padding: 18px 20px;">
+              <span style="display: inline-block; padding: 2px 8px; border-radius: 8px; background-color: ${t.accent}18; color: ${t.accent}; font-family: ${t.bodyFontStack}; font-size: 9px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;">VIDEO</span>
+              <span style="font-family: ${t.bodyFontStack}; font-size: 11px; color: ${t.textMuted}; margin-left: 8px;">${esc(v.channel_title || v.sources?.name || "")} &middot; ${esc(v.duration || "")}</span>
+              <a href="${esc(videoUrl)}" target="_blank" style="text-decoration: none; color: ${t.textPrimary};">
+                <h3 style="font-family: ${t.fontStack}; font-size: 18px; font-weight: 700; line-height: 1.3; color: ${t.textPrimary}; margin: 10px 0 8px 0;">${esc(v.title)}</h3>
+              </a>
+              <a href="${esc(videoUrl)}" target="_blank" style="font-family: ${t.bodyFontStack}; font-size: 12px; font-weight: 600; color: ${t.accent}; text-decoration: none;">Watch on YouTube →</a>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>`;
+    }
+  }
+
+  if (episodes.length > 0) {
+    html += `
+    <!-- ═══ LISTEN ═══ -->
+    <tr>
+      <td style="padding: 20px 0 16px 0;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0">
+          <tr>
+            <td style="font-family: ${t.bodyFontStack}; font-size: 11px; font-weight: 700; color: ${t.textMuted}; letter-spacing: 1.5px; text-transform: uppercase; padding-bottom: 12px; border-bottom: 1px solid ${t.border};">🎧 LISTEN</td>
+          </tr>
+        </table>
+      </td>
+    </tr>`;
+
+    for (const ep of episodes) {
+      const epUrl = ep.link || "#";
+      html += `
+    <tr>
+      <td style="padding: 0 0 16px 0;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: ${t.cardBg}; border: 1px solid ${t.border}; border-radius: 12px; overflow: hidden;">
+          <tr>
+            <td style="padding: 18px 20px;">
+              <span style="display: inline-block; padding: 2px 8px; border-radius: 8px; background-color: ${t.accent}18; color: ${t.accent}; font-family: ${t.bodyFontStack}; font-size: 9px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;">PODCAST</span>
+              <span style="font-family: ${t.bodyFontStack}; font-size: 11px; color: ${t.textMuted}; margin-left: 8px;">${esc(ep.sources?.name || "")} &middot; ${esc(ep.duration || "")}</span>
+              <a href="${esc(epUrl)}" target="_blank" style="text-decoration: none; color: ${t.textPrimary};">
+                <h3 style="font-family: ${t.fontStack}; font-size: 18px; font-weight: 700; line-height: 1.3; color: ${t.textPrimary}; margin: 10px 0 6px 0;">${esc(ep.title)}</h3>
+              </a>
+              ${ep.guest_name ? `<p style="font-family: ${t.bodyFontStack}; font-size: 13px; color: ${t.textSecondary}; margin: 0 0 8px 0;">${esc(ep.guest_name)}${ep.guest_org ? ` · ${esc(ep.guest_org)}` : ""}</p>` : ""}
+              <a href="${esc(epUrl)}" target="_blank" style="font-family: ${t.bodyFontStack}; font-size: 12px; font-weight: 600; color: ${t.accent}; text-decoration: none;">Listen to episode →</a>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>`;
+    }
+  }
+
+  return html;
+}
+
 // ─── Helpers ───
 
 function getSourceAbbr(name) {
@@ -365,6 +458,5 @@ function isColorDark(hex) {
   const r = parseInt(c.substring(0, 2), 16);
   const g = parseInt(c.substring(2, 4), 16);
   const b = parseInt(c.substring(4, 6), 16);
-  // Relative luminance formula
   return (r * 0.299 + g * 0.587 + b * 0.114) < 128;
 }
