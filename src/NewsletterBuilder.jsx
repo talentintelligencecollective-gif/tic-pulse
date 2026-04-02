@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { generateNewsletterHtml, NEWSLETTER_THEMES } from "./emailTemplate.js";
-import { supabase, loadUserPreferences, saveUserPreferences, lookupBrandGuidelines } from "./supabase.js";
+import { supabase, loadUserPreferences, saveUserPreferences, lookupBrandGuidelines, sendNewsletterEmail } from "./supabase.js";
 
 // ─── Theme Swatch ───
 
@@ -8,8 +8,8 @@ function ThemeSwatch({ theme, isActive, onClick, badge }) {
   return (
     <button onClick={onClick} style={{
       width: "100%", padding: "12px", borderRadius: "12px",
-      border: isActive ? `2px solid ${theme.accent}` : "2px solid #333",
-      background: "#111", cursor: "pointer", textAlign: "left", position: "relative",
+      border: isActive ? `2px solid ${theme.accent}` : "2px solid #2a3348",
+      background: "#111827", cursor: "pointer", textAlign: "left", position: "relative",
     }}>
       {badge && (
         <span style={{ position: "absolute", top: 6, right: 6, fontSize: "8px", fontWeight: 700, color: "#000", background: "#00e5a0", padding: "2px 6px", borderRadius: 6, letterSpacing: "0.5px" }}>{badge}</span>
@@ -19,7 +19,7 @@ function ThemeSwatch({ theme, isActive, onClick, badge }) {
           <div key={i} style={{
             flex: 1, height: "20px", background: c,
             borderRadius: i === 0 ? "4px 0 0 4px" : i === 3 ? "0 4px 4px 0" : "0",
-            border: "1px solid #333",
+            border: "1px solid #2a3348",
           }} />
         ))}
       </div>
@@ -65,7 +65,10 @@ export default function NewsletterBuilder({ articles, mediaItems = [], onClose, 
   const [prefsLoaded, setPrefsLoaded] = useState(false);
   const [brandMatch, setBrandMatch] = useState(null); // matched brand_guidelines row
   const [showBrandPrompt, setShowBrandPrompt] = useState(false);
-  const [emailStep, setEmailStep] = useState(0); // 0=idle, 1=downloaded, 2=opened
+  const [emailStep, setEmailStep] = useState(0);
+  const [recipientEmail, setRecipientEmail] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
 
   const previewRef = useRef(null);
   const saveTimerRef = useRef(null);
@@ -262,7 +265,7 @@ export default function NewsletterBuilder({ articles, mediaItems = [], onClose, 
   const themeList = Object.values(NEWSLETTER_THEMES);
   const inputStyle = {
     width: "100%", padding: "12px 14px", borderRadius: "12px",
-    border: "1px solid #333", background: "#111", color: "#eee",
+    border: "1px solid #2a3348", background: "#111827", color: "#eee",
     fontSize: "14px", outline: "none", fontFamily: "'DM Sans', sans-serif",
   };
 
@@ -274,7 +277,7 @@ export default function NewsletterBuilder({ articles, mediaItems = [], onClose, 
 
   return (
     <div style={{
-      position: "fixed", inset: 0, zIndex: 2000, background: "#000",
+      position: "fixed", inset: 0, zIndex: 2000, background: "#0b1120",
       display: "flex", flexDirection: "column", maxWidth: "480px", margin: "0 auto",
     }}>
       <style>{`
@@ -287,10 +290,10 @@ export default function NewsletterBuilder({ articles, mediaItems = [], onClose, 
       {/* ── Header ── */}
       <div style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "12px 16px", borderBottom: "1px solid #222", background: "#000",
+        padding: "12px 16px", borderBottom: "1px solid #1f2937", background: "#0b1120",
       }}>
         <button onClick={onClose} style={{
-          background: "none", border: "none", color: "#999", padding: "4px",
+          background: "none", border: "none", color: "#9ca3af", padding: "4px",
           display: "flex", alignItems: "center", fontSize: "24px", lineHeight: 1,
         }}>✕</button>
         <div style={{ textAlign: "center" }}>
@@ -310,7 +313,7 @@ export default function NewsletterBuilder({ articles, mediaItems = [], onClose, 
           padding: "24px",
         }}>
           <div className="nb-anim" style={{
-            background: "#111", border: "1px solid #333", borderRadius: "20px",
+            background: "#111827", border: "1px solid #2a3348", borderRadius: "20px",
             padding: "28px 24px", maxWidth: "340px", width: "100%", textAlign: "center",
           }}>
             <div style={{ fontSize: "32px", marginBottom: "12px" }}>🎨</div>
@@ -335,8 +338,8 @@ export default function NewsletterBuilder({ articles, mediaItems = [], onClose, 
                 background: "rgba(0,229,160,0.08)", color: "#00e5a0", fontSize: "13px", fontWeight: 700,
               }}>Corporate colours</button>
               <button onClick={() => handleBrandChoice("personal")} style={{
-                flex: 1, padding: "12px", borderRadius: "12px", border: "1px solid #444",
-                background: "#1a1a1e", color: "#ccc", fontSize: "13px", fontWeight: 600,
+                flex: 1, padding: "12px", borderRadius: "12px", border: "1px solid #374151",
+                background: "#1a2035", color: "#ccc", fontSize: "13px", fontWeight: 600,
               }}>Personal pref</button>
             </div>
             <button onClick={() => setShowBrandPrompt(false)} style={{
@@ -348,7 +351,7 @@ export default function NewsletterBuilder({ articles, mediaItems = [], onClose, 
       )}
 
       {/* ── Tabs ── */}
-      <div style={{ display: "flex", padding: "8px 16px", gap: "4px", borderBottom: "1px solid #222" }}>
+      <div style={{ display: "flex", padding: "8px 16px", gap: "4px", borderBottom: "1px solid #1f2937" }}>
         {[
           { id: "theme", label: "Theme" },
           { id: "content", label: "Content" },
@@ -383,8 +386,8 @@ export default function NewsletterBuilder({ articles, mediaItems = [], onClose, 
             </div>
             {activeThemeId === "custom" && (
               <div className="nb-anim" style={{
-                marginTop: "20px", padding: "16px", background: "#111",
-                borderRadius: "14px", border: "1px solid #333",
+                marginTop: "20px", padding: "16px", background: "#111827",
+                borderRadius: "14px", border: "1px solid #2a3348",
               }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
                   <div style={{ fontSize: "13px", fontWeight: 700, color: "#eee" }}>
@@ -457,7 +460,7 @@ export default function NewsletterBuilder({ articles, mediaItems = [], onClose, 
                 return (
                   <div key={item.id} style={{
                     display: "flex", alignItems: "center", gap: "10px", padding: "10px 12px",
-                    background: "#111", borderRadius: "10px", border: "1px solid #222", marginBottom: "6px",
+                    background: "#111827", borderRadius: "10px", border: "1px solid #1f2937", marginBottom: "6px",
                   }}>
                     <span style={{ fontSize: "14px", width: "22px", textAlign: "center", flexShrink: 0 }}>{typeIcon}</span>
                     <div style={{ flex: 1, minWidth: 0 }}>
@@ -477,7 +480,7 @@ export default function NewsletterBuilder({ articles, mediaItems = [], onClose, 
         {/* PREVIEW */}
         {activePanel === "preview" && (
           <div className="nb-anim" style={{ padding: "12px" }}>
-            <div style={{ borderRadius: "12px", overflow: "hidden", border: "1px solid #333", background: "#fff" }}>
+            <div style={{ borderRadius: "12px", overflow: "hidden", border: "1px solid #2a3348", background: "#fff" }}>
               <iframe ref={previewRef} title="Newsletter preview" sandbox="allow-same-origin"
                 style={{ width: "100%", height: "500px", border: "none", display: "block" }} />
             </div>
@@ -507,7 +510,7 @@ export default function NewsletterBuilder({ articles, mediaItems = [], onClose, 
               <button key={opt.label} onClick={opt.disabled ? undefined : opt.onClick} style={{
                 width: "100%", display: "flex", alignItems: "center", gap: "14px",
                 padding: "14px 16px", marginBottom: "8px", borderRadius: "14px",
-                border: "1px solid #222", background: "#111", cursor: opt.disabled ? "default" : "pointer",
+                border: "1px solid #1f2937", background: "#111827", cursor: opt.disabled ? "default" : "pointer",
                 textAlign: "left", opacity: opt.disabled ? 0.4 : 1,
               }}>
                 <span style={{ fontSize: "22px" }}>{opt.icon}</span>
@@ -528,8 +531,8 @@ export default function NewsletterBuilder({ articles, mediaItems = [], onClose, 
               <button key={opt.label} onClick={opt.onClick} style={{
                 width: "100%", display: "flex", alignItems: "center", gap: "14px",
                 padding: "14px 16px", marginBottom: "8px", borderRadius: "14px",
-                border: opt.highlight && copied ? "1px solid #00e5a0" : "1px solid #222",
-                background: opt.highlight && copied ? "rgba(0,229,160,0.08)" : "#111",
+                border: opt.highlight && copied ? "1px solid #00e5a0" : "1px solid #1f2937",
+                background: opt.highlight && copied ? "rgba(0,229,160,0.08)" : "#111827",
                 cursor: "pointer", textAlign: "left",
               }}>
                 <span style={{ fontSize: "22px" }}>{opt.icon}</span>
@@ -546,8 +549,8 @@ export default function NewsletterBuilder({ articles, mediaItems = [], onClose, 
             <button onClick={handleEmailWithHtml} style={{
               width: "100%", display: "flex", alignItems: "center", gap: "14px",
               padding: "14px 16px", marginBottom: "8px", borderRadius: "14px",
-              border: emailStep > 0 ? "1px solid #00e5a0" : "1px solid #222",
-              background: emailStep > 0 ? "rgba(0,229,160,0.05)" : "#111",
+              border: emailStep > 0 ? "1px solid #00e5a0" : "1px solid #1f2937",
+              background: emailStep > 0 ? "rgba(0,229,160,0.05)" : "#111827",
               cursor: "pointer", textAlign: "left",
             }}>
               <span style={{ fontSize: "22px" }}>✉️</span>
@@ -556,24 +559,60 @@ export default function NewsletterBuilder({ articles, mediaItems = [], onClose, 
                   {emailStep === 0 ? "Download & Draft Email" : emailStep === 1 ? "✓ File downloaded…" : "✓ Attach the downloaded file to your email"}
                 </div>
                 <div style={{ fontSize: "11px", color: "#888", marginTop: "2px" }}>
-                  {emailStep === 0
-                    ? "Downloads HTML, then opens your email client"
-                    : "Attach the .html file from your downloads folder"}
+                  {emailStep === 0 ? "Downloads HTML, then opens your email client" : "Attach the .html file from your downloads folder"}
                 </div>
-                {emailStep > 0 && (
-                  <div style={{ display: "flex", gap: "6px", marginTop: "8px" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                      <div style={{ width: "16px", height: "16px", borderRadius: "50%", background: "#00e5a0", color: "#000", fontSize: "10px", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>✓</div>
-                      <span style={{ fontSize: "10px", color: "#00e5a0" }}>Downloaded</span>
-                    </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                      <div style={{ width: "16px", height: "16px", borderRadius: "50%", background: emailStep >= 2 ? "#00e5a0" : "#333", color: emailStep >= 2 ? "#000" : "#888", fontSize: "10px", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{emailStep >= 2 ? "✓" : "2"}</div>
-                      <span style={{ fontSize: "10px", color: emailStep >= 2 ? "#00e5a0" : "#888" }}>Attach to email</span>
-                    </div>
-                  </div>
-                )}
               </div>
             </button>
+
+            {/* ── Send directly via Brevo ── */}
+            <div style={{ fontSize: "11px", fontWeight: 700, color: "#888", letterSpacing: "0.8px", margin: "24px 0 10px" }}>
+              SEND DIRECTLY
+            </div>
+            <div style={{ padding: "16px", background: "#111827", borderRadius: "14px", border: "1px solid #1f2937" }}>
+              <div style={{ marginBottom: "12px" }}>
+                <label style={{ display: "block", fontSize: "11px", fontWeight: 700, color: "#888", letterSpacing: "0.8px", marginBottom: "6px" }}>RECIPIENT EMAIL</label>
+                <input value={recipientEmail} onChange={(e) => setRecipientEmail(e.target.value)}
+                  placeholder="colleague@company.com"
+                  type="email"
+                  style={{ width: "100%", padding: "12px 14px", borderRadius: "12px", border: "1px solid #2a3348", background: "#080d1a", color: "#eee", fontSize: "14px", outline: "none", fontFamily: "'DM Sans', sans-serif" }}
+                  onFocus={(e) => e.target.style.borderColor = "#00e5a0"}
+                  onBlur={(e) => e.target.style.borderColor = "#2a3348"}
+                />
+              </div>
+              <button onClick={async () => {
+                if (!recipientEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail)) {
+                  onToast?.("Please enter a valid email address");
+                  return;
+                }
+                setSending(true);
+                try {
+                  await sendNewsletterEmail({
+                    to: recipientEmail,
+                    subject: title,
+                    htmlContent: html,
+                    senderName: senderName || undefined,
+                  });
+                  setSent(true);
+                  onToast?.(`Newsletter sent to ${recipientEmail}`);
+                  setTimeout(() => setSent(false), 4000);
+                } catch (err) {
+                  onToast?.(`Failed to send: ${err.message}`);
+                }
+                setSending(false);
+              }} disabled={sending || sent} style={{
+                width: "100%", padding: "14px", borderRadius: "12px", border: "none",
+                background: sent ? "rgba(0,229,160,0.15)" : "#00e5a0",
+                color: sent ? "#00e5a0" : "#000",
+                fontSize: "14px", fontWeight: 700,
+                opacity: sending ? 0.6 : 1,
+                transition: "all 0.2s",
+              }}>
+                {sending ? "Sending…" : sent ? "✓ Sent!" : "Send Newsletter"}
+              </button>
+              <p style={{ fontSize: "10px", color: "#6b7280", textAlign: "center", margin: "8px 0 0" }}>
+                Sends the newsletter directly via email — no attachment needed
+              </p>
+            </div>
           </div>
         )}
       </div>
