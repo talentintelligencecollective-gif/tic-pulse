@@ -2,10 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { HeartIcon, CommentIcon, ShareIcon, BookmarkIcon, ExternalIcon, ToneIndicator } from "./Icons.jsx";
 
-const supabase = createClient(
-  import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
-);
+const supabase = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY);
 
 const CAT_COLORS = {
   "Talent Strategy": "#00e5a0", "Labour Market": "#00b4d8", "Automation": "#ff6b35",
@@ -39,7 +36,7 @@ function formatRelativeTime(isoString) {
   return new Date(isoString).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 }
 
-export default function ArticleCard({ article, index, user, onLike, onBookmark, onShare, isLiked, isBookmarked, isSelected, onToggleSelect }) {
+export default function ArticleCard({ article, index, user, onLike, onBookmark, onShare, isLiked, isBookmarked, isSelected, onToggleSelect, isRead, onMarkRead }) {
   const [showComments, setShowComments] = useState(false);
   const [imgError, setImgError] = useState(false);
   const [comments, setComments] = useState([]);
@@ -50,90 +47,63 @@ export default function ArticleCard({ article, index, user, onLike, onBookmark, 
   const color = CAT_COLORS[article.category] || "#00e5a0";
   const abbr = sourceAbbr(article.source_name);
   const hasImage = article.image_url && !imgError;
-  const [grad1, grad2] = CAT_GRADIENTS[article.category] || ["#111", "#1a1a1a"];
+  const [grad1, grad2] = CAT_GRADIENTS[article.category] || ["#111827", "#1a2035"];
   const timeDisplay = formatRelativeTime(article.published_at || article.created_at);
 
-  // Load real comment count on mount
   useEffect(() => {
     async function loadCount() {
-      try {
-        const { count } = await supabase
-          .from("comments")
-          .select("id", { count: "exact", head: true })
-          .eq("article_id", article.id);
-        if (count !== null) setCommentCount(count);
-      } catch {}
+      try { const { count } = await supabase.from("comments").select("id", { count: "exact", head: true }).eq("article_id", article.id); if (count !== null) setCommentCount(count); } catch {}
     }
     loadCount();
   }, [article.id]);
 
-  // Load comments when expanded
   useEffect(() => {
     if (!showComments) return;
     async function loadComments() {
-      try {
-        const { data } = await supabase
-          .from("comments")
-          .select("*")
-          .eq("article_id", article.id)
-          .is("parent_id", null)
-          .order("created_at", { ascending: true });
-        setComments(data || []);
-        setCommentCount(data?.length || 0);
-      } catch (e) {
-        console.error("Failed to load comments:", e);
-      }
+      try { const { data } = await supabase.from("comments").select("*").eq("article_id", article.id).is("parent_id", null).order("created_at", { ascending: true }); setComments(data || []); setCommentCount(data?.length || 0); } catch (e) { console.error("Failed to load comments:", e); }
     }
     loadComments();
   }, [showComments, article.id]);
 
-  // Submit comment
   const handleSubmitComment = useCallback(async () => {
     if (!commentText.trim() || !user || submitting) return;
     setSubmitting(true);
     try {
       const userName = user.user_metadata?.full_name || user.email?.split("@")[0] || "Anonymous";
-      const { data, error } = await supabase.from("comments").insert({
-        user_id: user.id,
-        article_id: article.id,
-        text: commentText.trim(),
-        user_name: userName,
-        user_email: user.email,
-      }).select().single();
-
+      const { data, error } = await supabase.from("comments").insert({ user_id: user.id, article_id: article.id, text: commentText.trim(), user_name: userName, user_email: user.email }).select().single();
       if (error) throw error;
-      setComments((prev) => [...prev, data]);
-      setCommentCount((c) => c + 1);
-      setCommentText("");
-    } catch (e) {
-      console.error("Failed to post comment:", e);
-    }
+      setComments((prev) => [...prev, data]); setCommentCount((c) => c + 1); setCommentText("");
+    } catch (e) { console.error("Failed to post comment:", e); }
     setSubmitting(false);
   }, [commentText, user, article.id, submitting]);
 
-  // Delete own comment
   const handleDeleteComment = useCallback(async (commentId) => {
-    try {
-      await supabase.from("comments").delete().eq("id", commentId);
-      setComments((prev) => prev.filter((c) => c.id !== commentId));
-      setCommentCount((c) => Math.max(0, c - 1));
-    } catch (e) {
-      console.error("Failed to delete comment:", e);
-    }
+    try { await supabase.from("comments").delete().eq("id", commentId); setComments((prev) => prev.filter((c) => c.id !== commentId)); setCommentCount((c) => Math.max(0, c - 1)); } catch (e) { console.error("Failed to delete:", e); }
   }, []);
+
+  // Mark as read when user clicks "Read full article" or expands
+  const handleReadClick = () => {
+    if (onMarkRead && !isRead) onMarkRead(article.id);
+  };
 
   return (
     <article style={{
-      background: "#111", borderRadius: "20px", overflow: "hidden", marginBottom: "16px",
-      border: isSelected ? "2px solid #00e5a0" : "1px solid #222",
+      background: "#111827", borderRadius: "20px", overflow: "hidden", marginBottom: "16px",
+      border: isSelected ? "2px solid #00e5a0" : "1px solid #1f2937",
       animation: `cardIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) ${index * 0.06}s both`,
-      transition: "border-color 0.3s, box-shadow 0.3s",
+      transition: "border-color 0.3s, box-shadow 0.3s, opacity 0.3s",
       boxShadow: isSelected ? "0 0 20px rgba(0,229,160,0.08)" : "none",
       position: "relative",
+      opacity: isRead ? 0.6 : 1,
     }}
-      onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.borderColor = "#333"; }}
-      onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.borderColor = "#222"; }}
+      onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.borderColor = "#2a3348"; }}
+      onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.borderColor = "#1f2937"; }}
     >
+      {/* Read indicator */}
+      {isRead && (
+        <div style={{ position: "absolute", top: 12, right: 12, zIndex: 5, fontSize: 8, fontWeight: 700, color: "#00e5a0", background: "rgba(0,229,160,0.15)", padding: "2px 7px", borderRadius: 6, letterSpacing: "0.5px" }}>READ</div>
+      )}
+
       {/* Source Row */}
       <div style={{ padding: "14px 18px 10px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "11px" }}>
@@ -152,13 +122,7 @@ export default function ArticleCard({ article, index, user, onLike, onBookmark, 
 
       {/* Hero Image */}
       <div style={{ position: "relative", paddingTop: "50%", overflow: "hidden" }}>
-        <div style={{
-          position: "absolute", inset: 0,
-          backgroundImage: hasImage ? `url(${article.image_url})` : "none",
-          backgroundSize: "cover", backgroundPosition: "center",
-          background: hasImage ? undefined : `linear-gradient(135deg, ${grad1}, ${grad2})`,
-          transition: "transform 0.7s cubic-bezier(0.16, 1, 0.3, 1)",
-        }}
+        <div style={{ position: "absolute", inset: 0, backgroundImage: hasImage ? `url(${article.image_url})` : "none", backgroundSize: "cover", backgroundPosition: "center", background: hasImage ? undefined : `linear-gradient(135deg, ${grad1}, ${grad2})`, transition: "transform 0.7s cubic-bezier(0.16, 1, 0.3, 1)" }}
           onMouseEnter={(e) => (e.currentTarget.style.transform = "scale(1.04)")}
           onMouseLeave={(e) => (e.currentTarget.style.transform = "scale(1)")}
         />
@@ -193,7 +157,7 @@ export default function ArticleCard({ article, index, user, onLike, onBookmark, 
             >{tag}</span>
           ))}
           <span style={{ marginLeft: "auto" }}>
-            <a href={article.gdelt_url} target="_blank" rel="noopener noreferrer" style={{
+            <a href={article.gdelt_url} target="_blank" rel="noopener noreferrer" onClick={handleReadClick} style={{
               display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "11px", color: "#888", fontWeight: 500, transition: "color 0.2s", textDecoration: "none",
             }}
               onMouseEnter={(e) => (e.currentTarget.style.color = "#00e5a0")}
@@ -204,7 +168,7 @@ export default function ArticleCard({ article, index, user, onLike, onBookmark, 
       </div>
 
       {/* Action Bar */}
-      <div onClick={(e) => e.stopPropagation()} style={{ padding: "10px 18px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", borderTop: "1px solid #1a1a1a" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ padding: "10px 18px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", borderTop: "1px solid #1a2035" }}>
         <div style={{ display: "flex", gap: "18px" }}>
           <ActionButton icon={<HeartIcon filled={isLiked} />} count={fmt(article.like_count)} active={isLiked} activeColor="#ff3b5c" onClick={() => onLike(article.id)} />
           <ActionButton icon={<CommentIcon />} count={fmt(commentCount)} active={showComments} activeColor="#00e5a0" onClick={() => setShowComments(!showComments)} />
@@ -213,113 +177,52 @@ export default function ArticleCard({ article, index, user, onLike, onBookmark, 
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
           {onToggleSelect && (
             <button onClick={() => onToggleSelect(article.id)} aria-label={isSelected ? "Remove from briefing" : "Add to briefing"} style={{
-              background: isSelected ? "#00e5a0" : "none", border: isSelected ? "none" : "1.5px solid #333",
+              background: isSelected ? "#00e5a0" : "none", border: isSelected ? "none" : "1.5px solid #2a3348",
               width: "28px", height: "28px", borderRadius: "8px", display: "flex", alignItems: "center", justifyContent: "center",
               color: isSelected ? "#000" : "#666", transition: "all 0.25s ease", padding: 0, flexShrink: 0,
             }}>
-              {isSelected ? (
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-              ) : (
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-              )}
+              {isSelected ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>}
             </button>
           )}
-          <button onClick={() => onBookmark(article.id)} aria-label={isBookmarked ? "Remove bookmark" : "Bookmark"} style={{
-            background: "none", border: "none", padding: 0, color: isBookmarked ? "#f59e0b" : "#888", transition: "color 0.2s",
-          }}><BookmarkIcon filled={isBookmarked} /></button>
+          <button onClick={() => onBookmark(article.id)} aria-label={isBookmarked ? "Remove bookmark" : "Bookmark"} style={{ background: "none", border: "none", padding: 0, color: isBookmarked ? "#f59e0b" : "#888", transition: "color 0.2s" }}><BookmarkIcon filled={isBookmarked} /></button>
         </div>
       </div>
 
-      {/* Comments Section */}
+      {/* Comments */}
       {showComments && (
-        <div style={{ padding: "2px 18px 18px", borderTop: "1px solid #1a1a1a", animation: "fadeSlide 0.25s ease" }}>
-          {/* Comment input */}
+        <div style={{ padding: "2px 18px 18px", borderTop: "1px solid #1a2035", animation: "fadeSlide 0.25s ease" }}>
           {user ? (
             <div style={{ display: "flex", gap: "10px", alignItems: "flex-start", marginTop: "14px", marginBottom: "16px" }}>
-              <div style={{
-                width: "30px", height: "30px", borderRadius: "50%", flexShrink: 0,
-                background: "linear-gradient(135deg, #00e5a0, #00b4d8)",
-                display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: "10px", fontWeight: 800, color: "#000",
-              }}>
+              <div style={{ width: "30px", height: "30px", borderRadius: "50%", flexShrink: 0, background: "linear-gradient(135deg, #00e5a0, #00b4d8)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "10px", fontWeight: 800, color: "#000" }}>
                 {(user.user_metadata?.full_name || user.email || "?").charAt(0).toUpperCase()}
               </div>
               <div style={{ flex: 1 }}>
-                <textarea
-                  value={commentText}
-                  onChange={(e) => setCommentText(e.target.value)}
-                  placeholder="Add a comment…"
-                  maxLength={2000}
-                  rows={2}
-                  style={{
-                    width: "100%", background: "#0a0a0a", border: "1px solid #333",
-                    borderRadius: "12px", padding: "10px 14px", fontSize: "13px",
-                    color: "#eee", resize: "none", outline: "none", fontFamily: "inherit",
-                    lineHeight: 1.5,
-                  }}
+                <textarea value={commentText} onChange={(e) => setCommentText(e.target.value)} placeholder="Add a comment…" maxLength={2000} rows={2}
+                  style={{ width: "100%", background: "#080d1a", border: "1px solid #2a3348", borderRadius: "12px", padding: "10px 14px", fontSize: "13px", color: "#eee", resize: "none", outline: "none", fontFamily: "inherit", lineHeight: 1.5 }}
                   onFocus={(e) => e.target.style.borderColor = "#00e5a0"}
-                  onBlur={(e) => e.target.style.borderColor = "#333"}
+                  onBlur={(e) => e.target.style.borderColor = "#2a3348"}
                 />
-                {commentText.trim() && (
-                  <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "8px" }}>
-                    <button onClick={handleSubmitComment} disabled={submitting} style={{
-                      background: "#00e5a0", border: "none", borderRadius: "10px",
-                      color: "#000", padding: "6px 16px", fontSize: "12px", fontWeight: 700,
-                      opacity: submitting ? 0.5 : 1,
-                    }}>{submitting ? "Posting…" : "Post"}</button>
-                  </div>
-                )}
+                {commentText.trim() && <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "8px" }}><button onClick={handleSubmitComment} disabled={submitting} style={{ background: "#00e5a0", border: "none", borderRadius: "10px", color: "#000", padding: "6px 16px", fontSize: "12px", fontWeight: 700, opacity: submitting ? 0.5 : 1 }}>{submitting ? "Posting…" : "Post"}</button></div>}
               </div>
             </div>
-          ) : (
-            <div style={{ textAlign: "center", padding: "16px 0" }}>
-              <p style={{ fontSize: "13px", color: "#888" }}>Log in to comment</p>
-            </div>
-          )}
+          ) : <div style={{ textAlign: "center", padding: "16px 0" }}><p style={{ fontSize: "13px", color: "#888" }}>Log in to comment</p></div>}
 
-          {/* Comment list */}
-          {comments.length === 0 && (
-            <div style={{ textAlign: "center", padding: "12px 0" }}>
-              <p style={{ fontSize: "12px", color: "#666" }}>No comments yet — be the first</p>
-            </div>
-          )}
+          {comments.length === 0 && <div style={{ textAlign: "center", padding: "12px 0" }}><p style={{ fontSize: "12px", color: "#6b7280" }}>No comments yet — be the first</p></div>}
 
           {comments.map((comment) => {
             const isOwn = user && comment.user_id === user.id;
             const initials = (comment.user_name || "?").charAt(0).toUpperCase();
             return (
-              <div key={comment.id} style={{
-                display: "flex", gap: "10px", marginBottom: "12px",
-                animation: "fadeSlide 0.2s ease",
-              }}>
-                <div style={{
-                  width: "28px", height: "28px", borderRadius: "50%", flexShrink: 0,
-                  background: isOwn ? "linear-gradient(135deg, #00e5a0, #00b4d8)" : "#222",
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: "10px", fontWeight: 700, color: isOwn ? "#000" : "#888",
-                }}>{initials}</div>
+              <div key={comment.id} style={{ display: "flex", gap: "10px", marginBottom: "12px", animation: "fadeSlide 0.2s ease" }}>
+                <div style={{ width: "28px", height: "28px", borderRadius: "50%", flexShrink: 0, background: isOwn ? "linear-gradient(135deg, #00e5a0, #00b4d8)" : "#1f2937", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "10px", fontWeight: 700, color: isOwn ? "#000" : "#888" }}>{initials}</div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "3px" }}>
-                    <span style={{ fontSize: "12px", fontWeight: 600, color: "#ccc" }}>
-                      {comment.user_name || "Anonymous"}
-                    </span>
-                    <span style={{ fontSize: "10px", color: "#555" }}>
-                      {formatRelativeTime(comment.created_at)}
-                    </span>
-                    {isOwn && (
-                      <button onClick={() => handleDeleteComment(comment.id)} style={{
-                        background: "none", border: "none", color: "#555", fontSize: "10px",
-                        marginLeft: "auto", padding: "2px 6px", borderRadius: "4px",
-                        transition: "color 0.2s",
-                      }}
-                        onMouseEnter={(e) => e.currentTarget.style.color = "#ff3b5c"}
-                        onMouseLeave={(e) => e.currentTarget.style.color = "#555"}
-                      >Delete</button>
-                    )}
+                    <span style={{ fontSize: "12px", fontWeight: 600, color: "#ccc" }}>{comment.user_name || "Anonymous"}</span>
+                    <span style={{ fontSize: "10px", color: "#4b5563" }}>{formatRelativeTime(comment.created_at)}</span>
+                    {isOwn && <button onClick={() => handleDeleteComment(comment.id)} style={{ background: "none", border: "none", color: "#4b5563", fontSize: "10px", marginLeft: "auto", padding: "2px 6px", borderRadius: "4px", transition: "color 0.2s" }} onMouseEnter={(e) => e.currentTarget.style.color = "#ff3b5c"} onMouseLeave={(e) => e.currentTarget.style.color = "#4b5563"}>Delete</button>}
                   </div>
-                  <p style={{ fontSize: "13px", color: "#aaa", lineHeight: 1.5, margin: 0 }}>
-                    {comment.text}
-                  </p>
+                  <p style={{ fontSize: "13px", color: "#aaa", lineHeight: 1.5, margin: 0 }}>{comment.text}</p>
                 </div>
               </div>
             );
@@ -332,10 +235,7 @@ export default function ArticleCard({ article, index, user, onLike, onBookmark, 
 
 function ActionButton({ icon, count, active, activeColor, onClick }) {
   return (
-    <button onClick={onClick} style={{
-      background: "none", border: "none", display: "flex", alignItems: "center", gap: "5px",
-      padding: 0, color: active ? activeColor : "#888", fontSize: "12px", fontWeight: 600, transition: "color 0.2s",
-    }}
+    <button onClick={onClick} style={{ background: "none", border: "none", display: "flex", alignItems: "center", gap: "5px", padding: 0, color: active ? activeColor : "#888", fontSize: "12px", fontWeight: 600, transition: "color 0.2s" }}
       onMouseEnter={(e) => { if (!active) e.currentTarget.style.color = activeColor; }}
       onMouseLeave={(e) => { if (!active) e.currentTarget.style.color = "#888"; }}
     >{icon}<span>{count}</span></button>
