@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { supabase, fetchArticles, incrementEngagement, loadMediaEngagement, upsertMediaEngagement, submitSourceSuggestion } from "./supabase.js";
+import { supabase, fetchArticles, incrementEngagement, loadMediaEngagement, upsertMediaEngagement, submitSourceSuggestion, loadArticleReads, markArticleRead } from "./supabase.js";
 import AuthPage from "./AuthPage.jsx";
 import ArticleCard from "./ArticleCard.jsx";
 import ShareSheet from "./ShareSheet.jsx";
@@ -110,7 +110,7 @@ export default function App() {
 
   if (authLoading) {
     return (
-      <div style={{ minHeight: "100vh", background: "#000", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ minHeight: "100vh", background: "#0b1120", display: "flex", alignItems: "center", justifyContent: "center" }}>
         <div style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#00e5a0", animation: "liveDot 1.5s ease infinite" }} />
         <style>{`@keyframes liveDot { 0%,100% { opacity:1; } 50% { opacity:0.3; } }`}</style>
       </div>
@@ -149,7 +149,16 @@ function PulseApp({ session }) {
   // Media engagement — shared across Watch/Listen/Saved
   const [mediaEngMap, setMediaEngMap] = useState(new Map());
 
+  // Article read tracking
+  const [readIds, setReadIds] = useState(new Set());
+
   const [trendingTags, setTrendingTags] = useState([]);
+
+  // Onboarding (first-time only)
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  useEffect(() => {
+    if (!localStorage.getItem("tic-pulse-onboarded")) setShowOnboarding(true);
+  }, []);
 
   const likedIdsRef = useRef(likedIds);
   useEffect(() => { likedIdsRef.current = likedIds; }, [likedIds]);
@@ -194,6 +203,18 @@ function PulseApp({ session }) {
       return next;
     });
     upsertMediaEngagement(userId, mediaType, mediaId, updates);
+  }, [userId]);
+
+  // ─── Load article reads ───
+  useEffect(() => {
+    if (!userId) return;
+    loadArticleReads(userId).then(setReadIds);
+  }, [userId]);
+
+  // ─── Mark article as read ───
+  const handleMarkRead = useCallback((articleId) => {
+    setReadIds((prev) => { const next = new Set(prev); next.add(articleId); return next; });
+    markArticleRead(userId, articleId);
   }, [userId]);
 
   // ─── Data Loading ───
@@ -298,7 +319,7 @@ function PulseApp({ session }) {
       />
 
       <main style={{ position: "relative", zIndex: 1 }}>
-        {activeTab === "feed" && <FeedView articles={filteredArticles} loading={loading} error={error} searchQuery={searchQuery} likedIds={likedIds} bookmarkedIds={bookmarkedIds} selectedIds={selectedIdSet} trendingTags={trendingTags} user={session?.user} onLike={handleLike} onBookmark={handleBookmark} onShare={handleShare} onToggleSelect={handleToggleSelect} onClearFilters={() => { setActiveCategory("All"); setSearchQuery(""); setSearchOpen(false); }} onSearchTag={(tag) => { setSearchQuery(tag); setSearchOpen(true); }} onRetry={loadArticles} />}
+        {activeTab === "feed" && <FeedView articles={filteredArticles} loading={loading} error={error} searchQuery={searchQuery} likedIds={likedIds} bookmarkedIds={bookmarkedIds} selectedIds={selectedIdSet} readIds={readIds} trendingTags={trendingTags} user={session?.user} onLike={handleLike} onBookmark={handleBookmark} onShare={handleShare} onToggleSelect={handleToggleSelect} onMarkRead={handleMarkRead} onClearFilters={() => { setActiveCategory("All"); setSearchQuery(""); setSearchOpen(false); }} onSearchTag={(tag) => { setSearchQuery(tag); setSearchOpen(true); }} onRetry={loadArticles} />}
         {activeTab === "watch" && <WatchView userId={userId} mediaEngMap={mediaEngMap} onUpdateMediaEng={updateMediaEng} onToggleMediaSelect={handleToggleMediaSelect} selectedMedia={selectedMedia} onToast={showToast} />}
         {activeTab === "listen" && <ListenView userId={userId} mediaEngMap={mediaEngMap} onUpdateMediaEng={updateMediaEng} onToggleMediaSelect={handleToggleMediaSelect} selectedMedia={selectedMedia} onToast={showToast} />}
         {activeTab === "discover" && <DiscoverView />}
@@ -309,13 +330,13 @@ function PulseApp({ session }) {
 
       {totalSelected > 0 && (
         <div style={{ position: "fixed", bottom: "72px", left: "50%", transform: "translateX(-50%)", width: "calc(100% - 24px)", maxWidth: "456px", zIndex: 150, animation: "fadeSlide 0.3s cubic-bezier(0.16, 1, 0.3, 1)" }}>
-          <div style={{ background: "#1a1a1e", borderRadius: "18px", border: "1px solid #333", padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", boxShadow: "0 8px 40px rgba(0,0,0,0.6)" }}>
+          <div style={{ background: "#1a2035", borderRadius: "18px", border: "1px solid #2a3348", padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", boxShadow: "0 8px 40px rgba(0,0,0,0.6)" }}>
             <div>
               <div style={{ fontSize: "14px", fontWeight: 700, color: "#fff" }}>{totalSelected} item{totalSelected !== 1 ? "s" : ""} selected</div>
               <div style={{ fontSize: "11px", color: "#999", marginTop: "1px" }}>Ready to build your briefing</div>
             </div>
             <div style={{ display: "flex", gap: "8px" }}>
-              <button onClick={() => { setSelectedIds([]); setSelectedMedia([]); }} style={{ background: "none", border: "1px solid #444", borderRadius: "12px", color: "#ccc", padding: "10px 14px", fontSize: "12px", fontWeight: 600 }}>Clear</button>
+              <button onClick={() => { setSelectedIds([]); setSelectedMedia([]); }} style={{ background: "none", border: "1px solid #374151", borderRadius: "12px", color: "#ccc", padding: "10px 14px", fontSize: "12px", fontWeight: 600 }}>Clear</button>
               <button onClick={handleOpenNewsletter} style={{ background: "#00e5a0", border: "none", borderRadius: "12px", color: "#000", padding: "10px 18px", fontSize: "13px", fontWeight: 700, display: "flex", alignItems: "center", gap: "6px" }}><NewsletterIcon size={16} /> Build</button>
             </div>
           </div>
@@ -325,6 +346,7 @@ function PulseApp({ session }) {
       <ShareSheet article={shareTarget} onClose={() => setShareTarget(null)} onToast={showToast} />
       <Toast message={toast.msg} visible={toast.show} />
       {showNewsletter && <NewsletterBuilder articles={selectedArticles} mediaItems={selectedMedia} onClose={() => setShowNewsletter(false)} onToast={showToast} userId={userId} session={session} />}
+      {showOnboarding && <OnboardingOverlay onDismiss={() => { setShowOnboarding(false); localStorage.setItem("tic-pulse-onboarded", "1"); }} />}
     </div>
   );
 }
@@ -339,7 +361,7 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
   const showCategories = activeTab === "feed";
 
   return (
-    <header style={{ position: "sticky", top: 0, zIndex: 100, background: "#000", borderBottom: "1px solid #222" }}>
+    <header style={{ position: "sticky", top: 0, zIndex: 100, background: "#0b1120", borderBottom: "1px solid #1f2937" }}>
       <div style={{ padding: "10px 16px 0", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
           <img src="/tic-head.png" alt="TIC" style={{ width: "34px", height: "34px", objectFit: "contain" }} />
@@ -363,8 +385,8 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
             {showUserMenu && (
               <>
                 <div style={{ position: "fixed", inset: 0, zIndex: 200 }} onClick={() => setShowUserMenu(false)} />
-                <div style={{ position: "absolute", top: "40px", right: 0, background: "#1a1a1e", border: "1px solid #444", borderRadius: "14px", padding: "8px", minWidth: "180px", zIndex: 201, boxShadow: "0 8px 32px rgba(0,0,0,0.5)", animation: "fadeSlide 0.15s ease" }}>
-                  <div style={{ padding: "10px 12px", borderBottom: "1px solid #333" }}>
+                <div style={{ position: "absolute", top: "40px", right: 0, background: "#1a2035", border: "1px solid #374151", borderRadius: "14px", padding: "8px", minWidth: "180px", zIndex: 201, boxShadow: "0 8px 32px rgba(0,0,0,0.5)", animation: "fadeSlide 0.15s ease" }}>
+                  <div style={{ padding: "10px 12px", borderBottom: "1px solid #2a3348" }}>
                     <div style={{ fontSize: "13px", fontWeight: 600, color: "#eee" }}>{user?.user_metadata?.full_name || "User"}</div>
                     <div style={{ fontSize: "11px", color: "#888", marginTop: "2px" }}>{user?.email}</div>
                   </div>
@@ -377,7 +399,7 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
       </div>
       {searchOpen && (
         <div style={{ padding: "10px 16px 0", animation: "fadeSlide 0.2s ease" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "10px", background: "#111", borderRadius: "14px", padding: "0 14px", border: "1px solid #333" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", background: "#111827", borderRadius: "14px", padding: "0 14px", border: "1px solid #2a3348" }}>
             <SearchIcon size={16} />
             <input ref={searchInputRef} value={searchQuery} onChange={(e) => onSearchChange(e.target.value)} placeholder="Search articles, topics, tags..." style={{ flex: 1, background: "none", border: "none", color: "#eee", padding: "11px 0", fontSize: "14px", outline: "none" }} />
             {searchQuery && <button onClick={() => onSearchChange("")} style={{ background: "rgba(255,255,255,0.08)", border: "none", color: "#888", width: "20px", height: "20px", borderRadius: "50%", fontSize: "12px", display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>}
@@ -389,7 +411,7 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
           {CATEGORIES.map((cat) => {
             const isActive = activeCategory === cat;
             const color = cat === "All" ? "#00e5a0" : (CAT_COLORS[cat] || "#00e5a0");
-            return <button key={cat} onClick={() => onCategoryChange(cat)} style={{ padding: "5px 14px", borderRadius: "20px", whiteSpace: "nowrap", fontSize: "11px", fontWeight: 700, letterSpacing: "0.3px", border: isActive ? `1px solid ${color}40` : "1px solid #333", background: isActive ? `${color}12` : "#111", color: isActive ? color : "#999", transition: "all 0.25s ease" }}>{cat}</button>;
+            return <button key={cat} onClick={() => onCategoryChange(cat)} style={{ padding: "5px 14px", borderRadius: "20px", whiteSpace: "nowrap", fontSize: "11px", fontWeight: 700, letterSpacing: "0.3px", border: isActive ? `1px solid ${color}40` : "1px solid #2a3348", background: isActive ? `${color}12` : "#111827", color: isActive ? color : "#999", transition: "all 0.25s ease" }}>{cat}</button>;
           })}
         </div>
       )}
@@ -402,7 +424,7 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
 //  FEED VIEW
 // ═══════════════════════════════════════════════
 
-function FeedView({ articles, loading, error, searchQuery, likedIds, bookmarkedIds, selectedIds, trendingTags, user, onLike, onBookmark, onShare, onToggleSelect, onClearFilters, onSearchTag, onRetry }) {
+function FeedView({ articles, loading, error, searchQuery, likedIds, bookmarkedIds, selectedIds, readIds, trendingTags, user, onLike, onBookmark, onShare, onToggleSelect, onMarkRead, onClearFilters, onSearchTag, onRetry }) {
   const hasSelections = selectedIds.size > 0;
   return (
     <div style={{ padding: hasSelections ? "12px 12px 180px" : "12px 12px 110px" }}>
@@ -416,7 +438,7 @@ function FeedView({ articles, loading, error, searchQuery, likedIds, bookmarkedI
       {loading && articles.length === 0 && <SkeletonCards />}
       {error && <div style={{ textAlign: "center", padding: "48px 20px" }}><p style={{ fontSize: "14px", color: "#ff3b5c", fontWeight: 500 }}>{error}</p><button onClick={onRetry} style={{ background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.2)", color: "#00e5a0", padding: "8px 20px", borderRadius: "12px", fontSize: "13px", fontWeight: 600, marginTop: "12px" }}>Try again</button></div>}
       {!loading && !error && articles.length === 0 && <div style={{ textAlign: "center", padding: "60px 20px" }}><div style={{ fontSize: "40px", marginBottom: "12px", opacity: 0.5 }}>🔍</div><p style={{ fontSize: "15px", color: "#888", fontWeight: 500 }}>No articles match your filters</p><button onClick={onClearFilters} style={{ background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.2)", color: "#00e5a0", padding: "8px 20px", borderRadius: "12px", fontSize: "13px", fontWeight: 600, marginTop: "12px" }}>Clear filters</button></div>}
-      {articles.map((article, i) => <ArticleCard key={article.id} article={article} index={i} user={user} isLiked={likedIds.has(article.id)} isBookmarked={bookmarkedIds.has(article.id)} isSelected={selectedIds.has(article.id)} onLike={onLike} onBookmark={onBookmark} onShare={onShare} onToggleSelect={onToggleSelect} />)}
+      {articles.map((article, i) => <ArticleCard key={article.id} article={article} index={i} user={user} isLiked={likedIds.has(article.id)} isBookmarked={bookmarkedIds.has(article.id)} isSelected={selectedIds.has(article.id)} isRead={readIds.has(article.id)} onLike={onLike} onBookmark={onBookmark} onShare={onShare} onToggleSelect={onToggleSelect} onMarkRead={onMarkRead} />)}
     </div>
   );
 }
@@ -582,10 +604,10 @@ function WatchView({ userId, mediaEngMap, onUpdateMediaEng, onToggleMediaSelect,
     const eng = mediaEngMap.get(`video:${selected.id}`);
     const isSaved = eng?.saved_for_later;
     return (
-      <div style={{ padding: "16px 12px 120px", animation: "fadeSlide 0.3s ease", background: "#000", minHeight: "calc(100vh - 120px)" }}>
-        <div style={{ background: "#111", borderRadius: "16px", border: "1px solid #333", overflow: "hidden" }}>
+      <div style={{ padding: "16px 12px 120px", animation: "fadeSlide 0.3s ease", background: "#0b1120", minHeight: "calc(100vh - 120px)" }}>
+        <div style={{ background: "#111827", borderRadius: "16px", border: "1px solid #2a3348", overflow: "hidden" }}>
           {/* YT API player container — replaced by YT.Player */}
-          <div style={{ width: "100%", aspectRatio: "16/9", background: "#000" }}>
+          <div style={{ width: "100%", aspectRatio: "16/9", background: "#0b1120" }}>
             <div id="yt-player-container" style={{ width: "100%", height: "100%" }} />
           </div>
           <div style={{ padding: "16px 18px" }}>
@@ -602,14 +624,14 @@ function WatchView({ userId, mediaEngMap, onUpdateMediaEng, onToggleMediaSelect,
             </div>
             {selected.tags?.length > 0 && (
               <div style={{ display: "flex", gap: 5, marginBottom: 14, flexWrap: "wrap" }}>
-                {selected.tags.slice(0, 8).map(tag => <span key={tag} style={{ fontSize: 10, padding: "2px 8px", borderRadius: 10, background: "#1a1a1e", color: "#888", border: "1px solid #333" }}>{tag}</span>)}
+                {selected.tags.slice(0, 8).map(tag => <span key={tag} style={{ fontSize: 10, padding: "2px 8px", borderRadius: 10, background: "#1a2035", color: "#888", border: "1px solid #2a3348" }}>{tag}</span>)}
               </div>
             )}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button onClick={() => setSelected(null)} style={{ padding: "8px 16px", borderRadius: 10, fontSize: 12, background: "#1a1a1e", color: "#ccc", border: "1px solid #333" }}>← Back</button>
+              <button onClick={() => setSelected(null)} style={{ padding: "8px 16px", borderRadius: 10, fontSize: 12, background: "#1a2035", color: "#ccc", border: "1px solid #2a3348" }}>← Back</button>
               <a href={`https://www.youtube.com/watch?v=${selected.youtube_id}`} target="_blank" rel="noopener noreferrer" style={{ padding: "8px 16px", borderRadius: 10, fontSize: 12, fontWeight: 700, background: "#00e5a0", color: "#000", display: "inline-block", textDecoration: "none" }}>YouTube ↗</a>
-              <button onClick={() => { onUpdateMediaEng("video", selected.id, { saved_for_later: !isSaved }); onToast(isSaved ? "Removed from Watch Later" : "Saved to Watch Later"); }} style={{ padding: "8px 16px", borderRadius: 10, fontSize: 12, fontWeight: 600, background: isSaved ? "rgba(0,229,160,0.1)" : "#1a1a1e", color: isSaved ? "#00e5a0" : "#888", border: `1px solid ${isSaved ? "rgba(0,229,160,0.3)" : "#333"}` }}>{isSaved ? "✓ Saved" : "Watch Later"}</button>
-              <button onClick={() => onToggleMediaSelect(selected, "video")} style={{ padding: "8px 16px", borderRadius: 10, fontSize: 12, fontWeight: 600, background: isMediaSelected(selected.id) ? "rgba(0,229,160,0.1)" : "#1a1a1e", color: isMediaSelected(selected.id) ? "#00e5a0" : "#888", border: `1px solid ${isMediaSelected(selected.id) ? "rgba(0,229,160,0.3)" : "#333"}` }}>{isMediaSelected(selected.id) ? "✓ Newsletter" : "+ Newsletter"}</button>
+              <button onClick={() => { onUpdateMediaEng("video", selected.id, { saved_for_later: !isSaved }); onToast(isSaved ? "Removed from Watch Later" : "Saved to Watch Later"); }} style={{ padding: "8px 16px", borderRadius: 10, fontSize: 12, fontWeight: 600, background: isSaved ? "rgba(0,229,160,0.1)" : "#1a2035", color: isSaved ? "#00e5a0" : "#888", border: `1px solid ${isSaved ? "rgba(0,229,160,0.3)" : "#2a3348"}` }}>{isSaved ? "✓ Saved" : "Watch Later"}</button>
+              <button onClick={() => onToggleMediaSelect(selected, "video")} style={{ padding: "8px 16px", borderRadius: 10, fontSize: 12, fontWeight: 600, background: isMediaSelected(selected.id) ? "rgba(0,229,160,0.1)" : "#1a2035", color: isMediaSelected(selected.id) ? "#00e5a0" : "#888", border: `1px solid ${isMediaSelected(selected.id) ? "rgba(0,229,160,0.3)" : "#2a3348"}` }}>{isMediaSelected(selected.id) ? "✓ Newsletter" : "+ Newsletter"}</button>
             </div>
           </div>
         </div>
@@ -619,31 +641,31 @@ function WatchView({ userId, mediaEngMap, onUpdateMediaEng, onToggleMediaSelect,
 
   // ─── Grid view ───
   return (
-    <div style={{ padding: "16px 12px 120px", animation: "fadeSlide 0.3s ease", background: "#000", minHeight: "calc(100vh - 120px)" }}>
+    <div style={{ padding: "16px 12px 120px", animation: "fadeSlide 0.3s ease", background: "#0b1120", minHeight: "calc(100vh - 120px)" }}>
       {/* Search + suggest row */}
       <div style={{ display: "flex", gap: 8, marginBottom: 12, padding: "0 4px" }}>
-        <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 10, background: "#111", borderRadius: 14, padding: "0 14px", border: "1px solid #333" }}>
+        <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 10, background: "#111827", borderRadius: 14, padding: "0 14px", border: "1px solid #2a3348" }}>
           <span style={{ fontSize: 14, color: "#666" }}>⌕</span>
           <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search videos…" style={{ flex: 1, background: "none", border: "none", color: "#eee", padding: "11px 0", fontSize: 13, outline: "none", fontFamily: "inherit" }} />
           {searchQuery && <button onClick={() => setSearchQuery("")} style={{ background: "rgba(255,255,255,0.08)", border: "none", color: "#888", width: 20, height: 20, borderRadius: "50%", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>}
         </div>
-        <button onClick={() => setShowSubmitForm(true)} title="Suggest a source" style={{ padding: "0 14px", borderRadius: 14, background: "#111", border: "1px solid #333", color: "#888", fontSize: 18, display: "flex", alignItems: "center", flexShrink: 0 }}>+</button>
+        <button onClick={() => setShowSubmitForm(true)} title="Suggest a source" style={{ padding: "0 14px", borderRadius: 14, background: "#111827", border: "1px solid #2a3348", color: "#888", fontSize: 18, display: "flex", alignItems: "center", flexShrink: 0 }}>+</button>
       </div>
 
       {/* Type + status + autoplay row */}
       <div style={{ display: "flex", gap: 6, marginBottom: 10, overflowX: "auto", scrollbarWidth: "none", padding: "0 4px" }}>
         {["all", "podcast", "video", "short", "panel", "event"].map(t => {
           const isActive = typeFilter === t; const color = t === "all" ? "#00e5a0" : videoTypeColor(t);
-          return <button key={t} onClick={() => setTypeFilter(t)} style={{ padding: "5px 14px", borderRadius: "20px", whiteSpace: "nowrap", fontSize: 11, fontWeight: 700, background: isActive ? `${color}18` : "#111", color: isActive ? color : "#888", border: `1px solid ${isActive ? color + "40" : "#222"}`, transition: "all 0.2s" }}>{t === "all" ? "All" : videoTypeLabel(t)}</button>;
+          return <button key={t} onClick={() => setTypeFilter(t)} style={{ padding: "5px 14px", borderRadius: "20px", whiteSpace: "nowrap", fontSize: 11, fontWeight: 700, background: isActive ? `${color}18` : "#111827", color: isActive ? color : "#888", border: `1px solid ${isActive ? color + "40" : "#1f2937"}`, transition: "all 0.2s" }}>{t === "all" ? "All" : videoTypeLabel(t)}</button>;
         })}
-        <button onClick={() => setAutoPlay(!autoPlay)} style={{ padding: "5px 10px", borderRadius: 20, fontSize: 10, fontWeight: 700, background: autoPlay ? "rgba(0,229,160,0.1)" : "#111", color: autoPlay ? "#00e5a0" : "#666", border: `1px solid ${autoPlay ? "rgba(0,229,160,0.2)" : "#222"}`, whiteSpace: "nowrap", marginLeft: "auto", flexShrink: 0 }}>{autoPlay ? "AUTO ▶" : "AUTO ⏸"}</button>
+        <button onClick={() => setAutoPlay(!autoPlay)} style={{ padding: "5px 10px", borderRadius: 20, fontSize: 10, fontWeight: 700, background: autoPlay ? "rgba(0,229,160,0.1)" : "#111827", color: autoPlay ? "#00e5a0" : "#666", border: `1px solid ${autoPlay ? "rgba(0,229,160,0.2)" : "#1f2937"}`, whiteSpace: "nowrap", marginLeft: "auto", flexShrink: 0 }}>{autoPlay ? "AUTO ▶" : "AUTO ⏸"}</button>
       </div>
 
       {/* Status filter */}
       <div style={{ display: "flex", gap: 6, marginBottom: 10, overflowX: "auto", scrollbarWidth: "none", padding: "0 4px" }}>
         {[{ id: "all", label: "All" }, { id: "new", label: "New" }, { id: "started", label: "In Progress" }, { id: "completed", label: "Watched" }].map(f => {
           const isActive = statusFilter === f.id;
-          return <button key={f.id} onClick={() => setStatusFilter(f.id)} style={{ padding: "4px 12px", borderRadius: 14, fontSize: 10, fontWeight: 600, background: isActive ? "rgba(0,180,216,0.12)" : "#0a0a0a", color: isActive ? "#00b4d8" : "#666", border: `1px solid ${isActive ? "rgba(0,180,216,0.3)" : "#1a1a1a"}`, whiteSpace: "nowrap" }}>{f.label}</button>;
+          return <button key={f.id} onClick={() => setStatusFilter(f.id)} style={{ padding: "4px 12px", borderRadius: 14, fontSize: 10, fontWeight: 600, background: isActive ? "rgba(0,180,216,0.12)" : "#080d1a", color: isActive ? "#00b4d8" : "#666", border: `1px solid ${isActive ? "rgba(0,180,216,0.3)" : "#1a2035"}`, whiteSpace: "nowrap" }}>{f.label}</button>;
         })}
       </div>
 
@@ -653,7 +675,7 @@ function WatchView({ userId, mediaEngMap, onUpdateMediaEng, onToggleMediaSelect,
           {topicFilter && <button onClick={() => setTopicFilter(null)} style={{ padding: "4px 10px", borderRadius: 14, fontSize: 10, fontWeight: 600, background: "rgba(255,59,92,0.1)", color: "#ff3b5c", border: "1px solid rgba(255,59,92,0.3)", whiteSpace: "nowrap" }}>✕ Clear</button>}
           {topTopics.map(({ tag, count }) => {
             const isActive = topicFilter === tag;
-            return <button key={tag} onClick={() => setTopicFilter(isActive ? null : tag)} style={{ padding: "4px 10px", borderRadius: 14, fontSize: 10, fontWeight: 600, background: isActive ? "rgba(0,229,160,0.12)" : "#0a0a0a", color: isActive ? "#00e5a0" : "#777", border: `1px solid ${isActive ? "rgba(0,229,160,0.3)" : "#1a1a1a"}`, whiteSpace: "nowrap" }}>{tag} <span style={{ color: "#555", marginLeft: 2 }}>{count}</span></button>;
+            return <button key={tag} onClick={() => setTopicFilter(isActive ? null : tag)} style={{ padding: "4px 10px", borderRadius: 14, fontSize: 10, fontWeight: 600, background: isActive ? "rgba(0,229,160,0.12)" : "#080d1a", color: isActive ? "#00e5a0" : "#777", border: `1px solid ${isActive ? "rgba(0,229,160,0.3)" : "#1a2035"}`, whiteSpace: "nowrap" }}>{tag} <span style={{ color: "#555", marginLeft: 2 }}>{count}</span></button>;
           })}
         </div>
       )}
@@ -677,7 +699,7 @@ function WatchView({ userId, mediaEngMap, onUpdateMediaEng, onToggleMediaSelect,
             const isWatched = eng?.completed;
             const isSaved = eng?.saved_for_later;
             return (
-              <div key={v.id} onClick={() => setSelected(v)} style={{ cursor: "pointer", background: "#111", borderRadius: 14, overflow: "hidden", border: `1px solid ${isMediaSelected(v.id) ? "#00e5a0" : "#222"}`, transition: "border-color 0.2s, transform 0.15s", animation: `cardIn 0.3s ease ${i * 0.03}s both`, opacity: isWatched ? 0.65 : 1 }}
+              <div key={v.id} onClick={() => setSelected(v)} style={{ cursor: "pointer", background: "#111827", borderRadius: 14, overflow: "hidden", border: `1px solid ${isMediaSelected(v.id) ? "#00e5a0" : "#1f2937"}`, transition: "border-color 0.2s, transform 0.15s", animation: `cardIn 0.3s ease ${i * 0.03}s both`, opacity: isWatched ? 0.65 : 1 }}
                 onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; }}
                 onMouseLeave={e => { e.currentTarget.style.transform = "none"; }}
               >
@@ -831,9 +853,9 @@ function ListenView({ userId, mediaEngMap, onUpdateMediaEng, onToggleMediaSelect
   const isMediaSelected = (id) => selectedMedia.some(m => m.id === id && m._mediaType === "episode");
 
   return (
-    <div style={{ padding: "16px 12px 120px", animation: "fadeSlide 0.3s ease", background: "#000", minHeight: "calc(100vh - 120px)" }}>
+    <div style={{ padding: "16px 12px 120px", animation: "fadeSlide 0.3s ease", background: "#0b1120", minHeight: "calc(100vh - 120px)" }}>
       {/* Header with autoplay toggle */}
-      <div style={{ display: "flex", gap: 14, alignItems: "center", padding: "14px 16px", background: "#111", borderRadius: 16, border: "1px solid #222", marginBottom: 14 }}>
+      <div style={{ display: "flex", gap: 14, alignItems: "center", padding: "14px 16px", background: "#111827", borderRadius: 16, border: "1px solid #1f2937", marginBottom: 14 }}>
         <div style={{ width: 56, height: 56, borderRadius: 12, flexShrink: 0, background: "linear-gradient(135deg, rgba(0,229,160,0.1), rgba(0,180,216,0.1))", border: "1px solid rgba(0,229,160,0.2)", display: "flex", alignItems: "center", justifyContent: "center" }}>
           <img src="/tic-head.png" alt="TIC" style={{ width: 34, height: 34, objectFit: "contain" }} />
         </div>
@@ -841,33 +863,33 @@ function ListenView({ userId, mediaEngMap, onUpdateMediaEng, onToggleMediaSelect
           <h2 style={{ fontSize: 18, fontWeight: 700, color: "#fff", margin: "0 0 2px", fontFamily: "Georgia, serif" }}>TIC Podcast Network</h2>
           <div style={{ fontSize: 12, color: "#888" }}>{sources.length} shows · {episodes.length} episodes</div>
         </div>
-        <button onClick={() => setAutoPlay(!autoPlay)} style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 6, background: autoPlay ? "rgba(0,229,160,0.1)" : "#1a1a1e", color: autoPlay ? "#00e5a0" : "#666", border: `1px solid ${autoPlay ? "rgba(0,229,160,0.2)" : "#333"}`, flexShrink: 0 }}>{autoPlay ? "AUTO ▶" : "AUTO ⏸"}</button>
+        <button onClick={() => setAutoPlay(!autoPlay)} style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 6, background: autoPlay ? "rgba(0,229,160,0.1)" : "#1a2035", color: autoPlay ? "#00e5a0" : "#666", border: `1px solid ${autoPlay ? "rgba(0,229,160,0.2)" : "#2a3348"}`, flexShrink: 0 }}>{autoPlay ? "AUTO ▶" : "AUTO ⏸"}</button>
       </div>
 
       {/* Platform links */}
       {(!sourceFilter || sources.find(s => s.id === sourceFilter)?.name === "Talent Intelligence Collective Podcast") && (
         <div style={{ display: "flex", gap: 6, marginBottom: 14, justifyContent: "center" }}>
           {[{ label: "Spotify", url: "https://open.spotify.com/show/0ozE6GkCJjD6nrurugtHNh" }, { label: "Apple", url: "https://podcasts.apple.com/us/podcast/talent-intelligence-collective-podcast/id1533634924" }, { label: "YouTube", url: "https://www.youtube.com/@talentintelligencecollective" }].map(p => (
-            <a key={p.label} href={p.url} target="_blank" rel="noopener noreferrer" style={{ padding: "5px 12px", borderRadius: 16, fontSize: 10, fontWeight: 600, background: "#111", color: "#888", border: "1px solid #222", transition: "all 0.2s", textDecoration: "none" }}>{p.label} ↗</a>
+            <a key={p.label} href={p.url} target="_blank" rel="noopener noreferrer" style={{ padding: "5px 12px", borderRadius: 16, fontSize: 10, fontWeight: 600, background: "#111827", color: "#888", border: "1px solid #1f2937", transition: "all 0.2s", textDecoration: "none" }}>{p.label} ↗</a>
           ))}
         </div>
       )}
 
       {/* Search + suggest row (BUG 2 fix — prominent placement) */}
       <div style={{ display: "flex", gap: 8, marginBottom: 12, padding: "0 4px" }}>
-        <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 10, background: "#111", borderRadius: 14, padding: "0 14px", border: "1px solid #333" }}>
+        <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 10, background: "#111827", borderRadius: 14, padding: "0 14px", border: "1px solid #2a3348" }}>
           <span style={{ fontSize: 14, color: "#666" }}>⌕</span>
           <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search episodes, guests, topics…" style={{ flex: 1, background: "none", border: "none", color: "#eee", padding: "11px 0", fontSize: 13, outline: "none", fontFamily: "inherit" }} />
           {searchQuery && <button onClick={() => setSearchQuery("")} style={{ background: "rgba(255,255,255,0.08)", border: "none", color: "#888", width: 20, height: 20, borderRadius: "50%", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>}
         </div>
-        <button onClick={() => setShowSubmitForm(true)} title="Suggest a podcast" style={{ padding: "0 14px", borderRadius: 14, background: "#111", border: "1px solid #333", color: "#888", fontSize: 18, display: "flex", alignItems: "center", flexShrink: 0 }}>+</button>
+        <button onClick={() => setShowSubmitForm(true)} title="Suggest a podcast" style={{ padding: "0 14px", borderRadius: 14, background: "#111827", border: "1px solid #2a3348", color: "#888", fontSize: 18, display: "flex", alignItems: "center", flexShrink: 0 }}>+</button>
       </div>
 
       {/* Source filter */}
       {sources.length > 1 && (
         <div style={{ display: "flex", gap: 6, marginBottom: 10, overflowX: "auto", scrollbarWidth: "none", padding: "0 4px" }}>
-          <button onClick={() => setSourceFilter(null)} style={{ padding: "5px 14px", borderRadius: 20, fontSize: 11, fontWeight: 700, background: !sourceFilter ? "rgba(0,229,160,0.12)" : "#111", color: !sourceFilter ? "#00e5a0" : "#888", border: `1px solid ${!sourceFilter ? "rgba(0,229,160,0.3)" : "#222"}`, whiteSpace: "nowrap" }}>All Shows</button>
-          {sources.map(s => { const isActive = sourceFilter === s.id; return <button key={s.id} onClick={() => setSourceFilter(isActive ? null : s.id)} style={{ padding: "5px 14px", borderRadius: 20, fontSize: 11, fontWeight: 700, background: isActive ? "rgba(0,229,160,0.12)" : "#111", color: isActive ? "#00e5a0" : "#888", border: `1px solid ${isActive ? "rgba(0,229,160,0.3)" : "#222"}`, whiteSpace: "nowrap" }}>{s.name.length > 20 ? s.name.substring(0, 18) + "…" : s.name}</button>; })}
+          <button onClick={() => setSourceFilter(null)} style={{ padding: "5px 14px", borderRadius: 20, fontSize: 11, fontWeight: 700, background: !sourceFilter ? "rgba(0,229,160,0.12)" : "#111827", color: !sourceFilter ? "#00e5a0" : "#888", border: `1px solid ${!sourceFilter ? "rgba(0,229,160,0.3)" : "#1f2937"}`, whiteSpace: "nowrap" }}>All Shows</button>
+          {sources.map(s => { const isActive = sourceFilter === s.id; return <button key={s.id} onClick={() => setSourceFilter(isActive ? null : s.id)} style={{ padding: "5px 14px", borderRadius: 20, fontSize: 11, fontWeight: 700, background: isActive ? "rgba(0,229,160,0.12)" : "#111827", color: isActive ? "#00e5a0" : "#888", border: `1px solid ${isActive ? "rgba(0,229,160,0.3)" : "#1f2937"}`, whiteSpace: "nowrap" }}>{s.name.length > 20 ? s.name.substring(0, 18) + "…" : s.name}</button>; })}
         </div>
       )}
 
@@ -875,23 +897,23 @@ function ListenView({ userId, mediaEngMap, onUpdateMediaEng, onToggleMediaSelect
       <div style={{ display: "flex", gap: 6, marginBottom: 14, overflowX: "auto", scrollbarWidth: "none", padding: "0 4px" }}>
         {[{ id: "all", label: "All" }, { id: "new", label: "New" }, { id: "started", label: "In Progress" }, { id: "completed", label: "Listened" }].map(f => {
           const isActive = statusFilter === f.id;
-          return <button key={f.id} onClick={() => setStatusFilter(f.id)} style={{ padding: "4px 12px", borderRadius: 14, fontSize: 10, fontWeight: 600, background: isActive ? "rgba(0,180,216,0.12)" : "#0a0a0a", color: isActive ? "#00b4d8" : "#666", border: `1px solid ${isActive ? "rgba(0,180,216,0.3)" : "#1a1a1a"}`, whiteSpace: "nowrap" }}>{f.label}</button>;
+          return <button key={f.id} onClick={() => setStatusFilter(f.id)} style={{ padding: "4px 12px", borderRadius: 14, fontSize: 10, fontWeight: 600, background: isActive ? "rgba(0,180,216,0.12)" : "#080d1a", color: isActive ? "#00b4d8" : "#666", border: `1px solid ${isActive ? "rgba(0,180,216,0.3)" : "#1a2035"}`, whiteSpace: "nowrap" }}>{f.label}</button>;
         })}
       </div>
 
       {/* Now Playing */}
       {playing && (
-        <div style={{ marginBottom: 12, padding: "10px 14px", background: "#111", borderRadius: 12, border: "1px solid #00e5a0", animation: "fadeSlide 0.2s ease" }}>
+        <div style={{ marginBottom: 12, padding: "10px 14px", background: "#111827", borderRadius: 12, border: "1px solid #00e5a0", animation: "fadeSlide 0.2s ease" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
             <button onClick={() => { audioRef.current?.pause(); setPlaying(null); setProgress(0); }} style={{ width: 28, height: 28, borderRadius: "50%", background: "#00e5a0", border: "none", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-              <div style={{ display: "flex", gap: 2 }}><div style={{ width: 2.5, height: 10, background: "#000", borderRadius: 1 }} /><div style={{ width: 2.5, height: 10, background: "#000", borderRadius: 1 }} /></div>
+              <div style={{ display: "flex", gap: 2 }}><div style={{ width: 2.5, height: 10, background: "#0b1120", borderRadius: 1 }} /><div style={{ width: 2.5, height: 10, background: "#0b1120", borderRadius: 1 }} /></div>
             </button>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 12, fontWeight: 600, color: "#eee", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{episodes.find(e => e.id === playing)?.title || "Playing…"}</div>
               <div style={{ fontSize: 10, color: "#666" }}>{fmtTime(duration * progress / 100)} / {fmtTime(duration)}{autoPlay && <span style={{ color: "#00e5a0", marginLeft: 6 }}>auto ▶</span>}</div>
             </div>
           </div>
-          <div style={{ height: 3, background: "#222", borderRadius: 2, overflow: "hidden", cursor: "pointer" }} onClick={(e) => { if (!audioRef.current || !duration) return; const rect = e.currentTarget.getBoundingClientRect(); audioRef.current.currentTime = ((e.clientX - rect.left) / rect.width) * duration; }}>
+          <div style={{ height: 3, background: "#1f2937", borderRadius: 2, overflow: "hidden", cursor: "pointer" }} onClick={(e) => { if (!audioRef.current || !duration) return; const rect = e.currentTarget.getBoundingClientRect(); audioRef.current.currentTime = ((e.clientX - rect.left) / rect.width) * duration; }}>
             <div style={{ height: "100%", width: `${progress}%`, background: "#00e5a0", borderRadius: 2, transition: "width 0.3s linear" }} />
           </div>
         </div>
@@ -907,13 +929,13 @@ function ListenView({ userId, mediaEngMap, onUpdateMediaEng, onToggleMediaSelect
             const epProgress = eng && eng.duration_seconds > 0 ? Math.min(100, (eng.progress_seconds / eng.duration_seconds) * 100) : 0;
             const isCompleted = eng?.completed, isSaved = eng?.saved_for_later;
             return (
-              <div key={ep.id} style={{ background: "#111", borderRadius: 14, overflow: "hidden", border: `1px solid ${isPlay ? "#00e5a0" : isMediaSelected(ep.id) ? "#00e5a0" : "#222"}`, transition: "border-color 0.3s", animation: `cardIn 0.3s ease ${i * 0.03}s both`, opacity: isCompleted && !isPlay ? 0.65 : 1 }}>
-                {isPlay && <div style={{ height: 2, background: "#222" }}><div style={{ height: "100%", width: `${progress}%`, background: "#00e5a0", transition: "width 0.3s linear" }} /></div>}
-                {!isPlay && epProgress > 0 && !isCompleted && <div style={{ height: 2, background: "#222" }}><div style={{ height: "100%", width: `${epProgress}%`, background: "#00b4d8" }} /></div>}
+              <div key={ep.id} style={{ background: "#111827", borderRadius: 14, overflow: "hidden", border: `1px solid ${isPlay ? "#00e5a0" : isMediaSelected(ep.id) ? "#00e5a0" : "#1f2937"}`, transition: "border-color 0.3s", animation: `cardIn 0.3s ease ${i * 0.03}s both`, opacity: isCompleted && !isPlay ? 0.65 : 1 }}>
+                {isPlay && <div style={{ height: 2, background: "#1f2937" }}><div style={{ height: "100%", width: `${progress}%`, background: "#00e5a0", transition: "width 0.3s linear" }} /></div>}
+                {!isPlay && epProgress > 0 && !isCompleted && <div style={{ height: 2, background: "#1f2937" }}><div style={{ height: "100%", width: `${epProgress}%`, background: "#00b4d8" }} /></div>}
                 <div style={{ padding: "14px 16px" }}>
                   <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
-                    <button onClick={() => handlePlay(ep)} title={hasAudio ? (isPlay ? "Pause" : "Play") : "Open episode"} style={{ width: 40, height: 40, borderRadius: "50%", flexShrink: 0, background: isPlay ? "#00e5a0" : "#1a1a1e", display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.2s", marginTop: 2, border: "none" }}>
-                      {isPlay ? <div style={{ display: "flex", gap: 3 }}><div style={{ width: 3, height: 14, background: "#000", borderRadius: 1 }} /><div style={{ width: 3, height: 14, background: "#000", borderRadius: 1 }} /></div>
+                    <button onClick={() => handlePlay(ep)} title={hasAudio ? (isPlay ? "Pause" : "Play") : "Open episode"} style={{ width: 40, height: 40, borderRadius: "50%", flexShrink: 0, background: isPlay ? "#00e5a0" : "#1a2035", display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.2s", marginTop: 2, border: "none" }}>
+                      {isPlay ? <div style={{ display: "flex", gap: 3 }}><div style={{ width: 3, height: 14, background: "#0b1120", borderRadius: 1 }} /><div style={{ width: 3, height: 14, background: "#0b1120", borderRadius: 1 }} /></div>
                       : <div style={{ width: 0, height: 0, borderLeft: `10px solid ${hasAudio ? "#eee" : "#666"}`, borderTop: "7px solid transparent", borderBottom: "7px solid transparent", marginLeft: 2 }} />}
                     </button>
                     <div style={{ flex: 1, minWidth: 0 }}>
@@ -925,7 +947,7 @@ function ListenView({ userId, mediaEngMap, onUpdateMediaEng, onToggleMediaSelect
                       </div>
                       <h4 style={{ fontSize: 15, fontWeight: 700, color: "#eee", margin: "0 0 5px", lineHeight: 1.3, fontFamily: "Georgia, serif" }}>{ep.title}</h4>
                       {ep.guest_name && <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}><span style={{ fontSize: 12, color: "#aaa" }}>{ep.guest_name}</span>{ep.guest_org && <><span style={{ color: "#444" }}>·</span><span style={{ fontSize: 11, color: "#666" }}>{ep.guest_org}</span></>}</div>}
-                      {isExp && ep.description && <div style={{ marginTop: 8, marginBottom: 8, fontSize: 13, color: "#999", lineHeight: 1.6, padding: "10px 12px", background: "#0a0a0a", borderRadius: 10, animation: "fadeSlide 0.2s ease" }}>{ep.description}</div>}
+                      {isExp && ep.description && <div style={{ marginTop: 8, marginBottom: 8, fontSize: 13, color: "#999", lineHeight: 1.6, padding: "10px 12px", background: "#080d1a", borderRadius: 10, animation: "fadeSlide 0.2s ease" }}>{ep.description}</div>}
                       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                         {ep.duration && <span style={{ fontSize: 10, color: "#666" }}>⏱ {ep.duration}</span>}
                         {!hasAudio && ep.link && <a href={ep.link} target="_blank" rel="noopener noreferrer" style={{ fontSize: 10, color: "#00e5a0", textDecoration: "none" }}>Open ↗</a>}
@@ -967,17 +989,17 @@ function SourceSubmitForm({ userId, onClose, onToast }) {
     else onToast("Something went wrong — try again.");
   };
 
-  const inputStyle = { width: "100%", padding: "12px 14px", borderRadius: 12, border: "1px solid #333", background: "#111", color: "#eee", fontSize: 14, outline: "none", fontFamily: "'DM Sans', sans-serif" };
+  const inputStyle = { width: "100%", padding: "12px 14px", borderRadius: 12, border: "1px solid #2a3348", background: "#111827", color: "#eee", fontSize: 14, outline: "none", fontFamily: "'DM Sans', sans-serif" };
 
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 3000, background: "rgba(0,0,0,0.85)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-      <div style={{ background: "#111", border: "1px solid #333", borderRadius: 20, padding: "28px 24px", maxWidth: 400, width: "100%", animation: "fadeSlide 0.2s ease", maxHeight: "80vh", overflow: "auto" }}>
+      <div style={{ background: "#111827", border: "1px solid #2a3348", borderRadius: 20, padding: "28px 24px", maxWidth: 400, width: "100%", animation: "fadeSlide 0.2s ease", maxHeight: "80vh", overflow: "auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
           <h3 style={{ fontSize: 16, fontWeight: 700, color: "#eee", margin: 0, fontFamily: "Georgia, serif" }}>Suggest a Source</h3>
           <button onClick={onClose} style={{ background: "none", border: "none", color: "#888", fontSize: 20 }}>✕</button>
         </div>
         <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-          {["podcast", "youtube"].map(t => <button key={t} onClick={() => setSourceType(t)} style={{ flex: 1, padding: "10px", borderRadius: 12, fontSize: 13, fontWeight: 700, background: sourceType === t ? "rgba(0,229,160,0.1)" : "#1a1a1e", color: sourceType === t ? "#00e5a0" : "#888", border: `1px solid ${sourceType === t ? "rgba(0,229,160,0.3)" : "#333"}` }}>{t === "podcast" ? "🎧 Podcast" : "▶ YouTube"}</button>)}
+          {["podcast", "youtube"].map(t => <button key={t} onClick={() => setSourceType(t)} style={{ flex: 1, padding: "10px", borderRadius: 12, fontSize: 13, fontWeight: 700, background: sourceType === t ? "rgba(0,229,160,0.1)" : "#1a2035", color: sourceType === t ? "#00e5a0" : "#888", border: `1px solid ${sourceType === t ? "rgba(0,229,160,0.3)" : "#2a3348"}` }}>{t === "podcast" ? "🎧 Podcast" : "▶ YouTube"}</button>)}
         </div>
         <div style={{ marginBottom: 14 }}><label style={{ display: "block", fontSize: 11, fontWeight: 700, color: "#888", letterSpacing: "0.8px", marginBottom: 6 }}>NAME *</label><input value={name} onChange={e => setName(e.target.value)} placeholder={sourceType === "podcast" ? "Podcast name" : "Channel name"} style={inputStyle} /></div>
         <div style={{ marginBottom: 14 }}><label style={{ display: "block", fontSize: 11, fontWeight: 700, color: "#888", letterSpacing: "0.8px", marginBottom: 6 }}>HOST</label><input value={hostName} onChange={e => setHostName(e.target.value)} placeholder="Host name(s)" style={inputStyle} /></div>
@@ -996,16 +1018,16 @@ function SourceSubmitForm({ userId, onClose, onToast }) {
 function TrendingTicker({ tags, onTagClick }) {
   if (!tags || tags.length === 0) return null;
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: "10px", padding: "10px 14px", marginBottom: "14px", background: "rgba(255,255,255,0.015)", borderRadius: "14px", border: "1px solid #1a1a1a", overflowX: "auto", scrollbarWidth: "none" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: "10px", padding: "10px 14px", marginBottom: "14px", background: "rgba(255,255,255,0.015)", borderRadius: "14px", border: "1px solid #1a2035", overflowX: "auto", scrollbarWidth: "none" }}>
       <div style={{ display: "flex", alignItems: "center", gap: "5px", color: "#00e5a0", flexShrink: 0 }}><TrendingIcon /><span style={{ fontSize: "10px", fontWeight: 800, letterSpacing: "1.2px" }}>TRENDING</span></div>
-      <div style={{ width: "1px", height: "14px", background: "#333", flexShrink: 0 }} />
+      <div style={{ width: "1px", height: "14px", background: "#2a3348", flexShrink: 0 }} />
       {tags.map((t) => <button key={t.tag} onClick={() => onTagClick(t.tag.slice(1))} style={{ background: "none", border: "none", color: "#888", fontSize: "11px", fontWeight: 600, whiteSpace: "nowrap", padding: "3px 6px", borderRadius: "6px", transition: "all 0.2s" }}>{t.tag}</button>)}
     </div>
   );
 }
 
 function SkeletonCards() {
-  return <div style={{ animation: "fadeIn 0.3s" }}>{[0, 1, 2].map((i) => <div key={i} style={{ background: "#111", borderRadius: "20px", overflow: "hidden", marginBottom: "16px", border: "1px solid #222" }}><div style={{ padding: "14px 18px", display: "flex", alignItems: "center", gap: "11px" }}><div className="skeleton" style={{ width: "34px", height: "34px", borderRadius: "10px" }} /><div style={{ flex: 1 }}><div className="skeleton" style={{ width: "120px", height: "12px", marginBottom: "6px" }} /><div className="skeleton" style={{ width: "80px", height: "10px" }} /></div></div><div className="skeleton" style={{ width: "100%", height: "200px" }} /><div style={{ padding: "14px 18px" }}><div className="skeleton" style={{ width: "60px", height: "10px", marginBottom: "10px" }} /><div className="skeleton" style={{ width: "100%", height: "12px", marginBottom: "6px" }} /><div className="skeleton" style={{ width: "85%", height: "12px" }} /></div></div>)}</div>;
+  return <div style={{ animation: "fadeIn 0.3s" }}>{[0, 1, 2].map((i) => <div key={i} style={{ background: "#111827", borderRadius: "20px", overflow: "hidden", marginBottom: "16px", border: "1px solid #1f2937" }}><div style={{ padding: "14px 18px", display: "flex", alignItems: "center", gap: "11px" }}><div className="skeleton" style={{ width: "34px", height: "34px", borderRadius: "10px" }} /><div style={{ flex: 1 }}><div className="skeleton" style={{ width: "120px", height: "12px", marginBottom: "6px" }} /><div className="skeleton" style={{ width: "80px", height: "10px" }} /></div></div><div className="skeleton" style={{ width: "100%", height: "200px" }} /><div style={{ padding: "14px 18px" }}><div className="skeleton" style={{ width: "60px", height: "10px", marginBottom: "10px" }} /><div className="skeleton" style={{ width: "100%", height: "12px", marginBottom: "6px" }} /><div className="skeleton" style={{ width: "85%", height: "12px" }} /></div></div>)}</div>;
 }
 
 function DiscoverView() {
@@ -1021,15 +1043,15 @@ function DiscoverView() {
       <h2 style={{ fontSize: "24px", fontWeight: 700, color: "#fff", margin: "0 0 4px", fontFamily: "Georgia, serif" }}>TIC Digest</h2>
       <p style={{ fontSize: "13px", color: "#888", margin: "0 0 24px" }}>Articles and insights from the Talent Intelligence Collective</p>
       {loading && <div style={{ padding: "40px 0", textAlign: "center" }}><div style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#00e5a0", margin: "0 auto", animation: "liveDot 1.5s ease infinite" }} /><p style={{ fontSize: "13px", color: "#666", marginTop: "12px" }}>Loading…</p></div>}
-      {error && <div style={{ padding: "20px", borderRadius: "14px", background: "#111", border: "1px solid #333", textAlign: "center" }}><p style={{ fontSize: "13px", color: "#888", margin: 0 }}>{error}</p></div>}
+      {error && <div style={{ padding: "20px", borderRadius: "14px", background: "#111827", border: "1px solid #2a3348", textAlign: "center" }}><p style={{ fontSize: "13px", color: "#888", margin: 0 }}>{error}</p></div>}
       {!loading && !error && substackArticles.map((article, i) => (
-        <a key={article.url} href={article.url} target="_blank" rel="noopener noreferrer" style={{ display: "block", textDecoration: "none", marginBottom: "10px", padding: "14px 16px", background: "#0a0a0a", borderRadius: "14px", border: "1px solid #1a1a1a", animation: `cardIn 0.3s ease ${i * 0.03}s both` }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}><span style={{ fontSize: "10px", fontWeight: 700, color: "#00e5a0", letterSpacing: "1px" }}>TIC</span>{article.publishedAt && <><span style={{ color: "#333" }}>·</span><span style={{ fontSize: "11px", color: "#666" }}>{formatDate(article.publishedAt)}</span></>}</div>
+        <a key={article.url} href={article.url} target="_blank" rel="noopener noreferrer" style={{ display: "block", textDecoration: "none", marginBottom: "10px", padding: "14px 16px", background: "#080d1a", borderRadius: "14px", border: "1px solid #1a2035", animation: `cardIn 0.3s ease ${i * 0.03}s both` }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}><span style={{ fontSize: "10px", fontWeight: 700, color: "#00e5a0", letterSpacing: "1px" }}>TIC</span>{article.publishedAt && <><span style={{ color: "#2a3348" }}>·</span><span style={{ fontSize: "11px", color: "#666" }}>{formatDate(article.publishedAt)}</span></>}</div>
           <h3 style={{ fontSize: "15px", fontWeight: 700, color: "#eee", margin: "0 0 4px", lineHeight: 1.3, fontFamily: "Georgia, serif" }}>{decode(article.title)}</h3>
           {article.description && <p style={{ fontSize: "12px", lineHeight: 1.5, color: "#777", margin: 0, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{decode(article.description)}</p>}
         </a>
       ))}
-      {!loading && !error && <div style={{ textAlign: "center", padding: "16px 0" }}><a href="https://talentintelligencecollective.substack.com" target="_blank" rel="noopener noreferrer" style={{ fontSize: "13px", color: "#888", textDecoration: "none", padding: "10px 20px", borderRadius: "12px", border: "1px solid #333", display: "inline-block" }}>Subscribe to TIC on Substack</a></div>}
+      {!loading && !error && <div style={{ textAlign: "center", padding: "16px 0" }}><a href="https://talentintelligencecollective.substack.com" target="_blank" rel="noopener noreferrer" style={{ fontSize: "13px", color: "#888", textDecoration: "none", padding: "10px 20px", borderRadius: "12px", border: "1px solid #2a3348", display: "inline-block" }}>Subscribe to TIC on Substack</a></div>}
     </div>
   );
 }
@@ -1094,8 +1116,8 @@ function SavedView({ articles, likedIds, bookmarkedIds, mediaEngMap, user, onLik
                 const icon = m.mediaType === "video" ? "▶" : "🎧";
                 const subtitle = m.mediaType === "video" ? (m.channel_title || "Video") : (m.sources?.name || "Podcast");
                 return (
-                  <div key={m.id} style={{ padding: "12px 16px", background: "#111", borderRadius: 12, border: "1px solid #222", marginBottom: 8, opacity: m.completed ? 0.6 : 1 }}>
-                    {pct > 0 && !m.completed && <div style={{ height: 2, background: "#222", borderRadius: 2, marginBottom: 8 }}><div style={{ height: "100%", width: `${pct}%`, background: "#00e5a0", borderRadius: 2 }} /></div>}
+                  <div key={m.id} style={{ padding: "12px 16px", background: "#111827", borderRadius: 12, border: "1px solid #1f2937", marginBottom: 8, opacity: m.completed ? 0.6 : 1 }}>
+                    {pct > 0 && !m.completed && <div style={{ height: 2, background: "#1f2937", borderRadius: 2, marginBottom: 8 }}><div style={{ height: "100%", width: `${pct}%`, background: "#00e5a0", borderRadius: 2 }} /></div>}
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       <span style={{ fontSize: 18 }}>{icon}</span>
                       <div style={{ flex: 1, minWidth: 0 }}>
@@ -1116,6 +1138,64 @@ function SavedView({ articles, likedIds, bookmarkedIds, mediaEngMap, user, onLik
   );
 }
 
+// ═══════════════════════════════════════════════
+//  ONBOARDING OVERLAY — shows once for new users
+// ═══════════════════════════════════════════════
+
+function OnboardingOverlay({ onDismiss }) {
+  const [step, setStep] = useState(0);
+  const steps = [
+    { icon: "⚡", title: "Welcome to TIC Pulse", desc: "Your daily talent intelligence hub. Curated news, videos, podcasts, and newsletter tools — all in one place.", color: "#00e5a0" },
+    { icon: "📰", title: "Feed", desc: "Browse curated talent intelligence news. Like, comment, bookmark, and select articles for your newsletter briefing.", color: "#00e5a0" },
+    { icon: "▶", title: "Watch & Listen", desc: "Video and podcast content from top TI voices. Track your progress, save for later, and auto-play through episodes.", color: "#00b4d8" },
+    { icon: "✉️", title: "Newsletter Builder", desc: "Select articles, videos, and podcasts → choose a theme → preview → send a branded briefing directly from the app.", color: "#f59e0b" },
+  ];
+  const s = steps[step];
+  const isLast = step === steps.length - 1;
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 5000, background: "rgba(0,0,0,0.9)", backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "24px" }}>
+      <div style={{ maxWidth: "360px", width: "100%", textAlign: "center", animation: "fadeSlide 0.3s ease" }}>
+        {/* Logo */}
+        {step === 0 && <img src="/tic-head.png" alt="TIC" style={{ width: "56px", height: "56px", objectFit: "contain", marginBottom: "16px", opacity: 0.9 }} />}
+
+        {/* Icon */}
+        <div style={{ fontSize: "48px", marginBottom: "20px", lineHeight: 1 }}>{s.icon}</div>
+
+        {/* Title */}
+        <h2 style={{ fontSize: "24px", fontWeight: 800, color: "#fff", margin: "0 0 12px", fontFamily: "'Playfair Display', Georgia, serif", letterSpacing: "-0.5px" }}>{s.title}</h2>
+
+        {/* Description */}
+        <p style={{ fontSize: "14px", color: "#9ca3af", lineHeight: 1.7, margin: "0 0 32px", padding: "0 12px" }}>{s.desc}</p>
+
+        {/* Step dots */}
+        <div style={{ display: "flex", gap: "8px", justifyContent: "center", marginBottom: "28px" }}>
+          {steps.map((_, i) => (
+            <div key={i} onClick={() => setStep(i)} style={{
+              width: i === step ? "24px" : "8px", height: "8px", borderRadius: "4px",
+              background: i === step ? s.color : "#2a3348",
+              transition: "all 0.3s ease", cursor: "pointer",
+            }} />
+          ))}
+        </div>
+
+        {/* Buttons */}
+        <div style={{ display: "flex", gap: "10px", justifyContent: "center" }}>
+          {!isLast && (
+            <button onClick={onDismiss} style={{ padding: "12px 24px", borderRadius: "14px", border: "1px solid #2a3348", background: "transparent", color: "#6b7280", fontSize: "14px", fontWeight: 600 }}>Skip</button>
+          )}
+          <button onClick={isLast ? onDismiss : () => setStep(step + 1)} style={{
+            padding: "12px 32px", borderRadius: "14px", border: "none",
+            background: isLast ? "#00e5a0" : "rgba(0,229,160,0.12)",
+            color: isLast ? "#000" : "#00e5a0",
+            fontSize: "14px", fontWeight: 700, transition: "all 0.2s",
+          }}>{isLast ? "Get Started" : "Next"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function BottomNav({ activeTab, onTabChange }) {
   const tabs = [
     { id: "feed", label: "Feed", Icon: FeedIcon },
@@ -1125,7 +1205,7 @@ function BottomNav({ activeTab, onTabChange }) {
     { id: "saved", label: "Saved", Icon: () => <BookmarkIcon filled={false} size={22} /> },
   ];
   return (
-    <nav style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: "480px", zIndex: 100, background: "#000", borderTop: "1px solid #222", display: "flex", justifyContent: "space-around", padding: "8px 0 env(safe-area-inset-bottom, 20px)" }}>
+    <nav style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: "480px", zIndex: 100, background: "#0b1120", borderTop: "1px solid #1f2937", display: "flex", justifyContent: "space-around", padding: "8px 0 env(safe-area-inset-bottom, 20px)" }}>
       {tabs.map((tab) => {
         const isActive = activeTab === tab.id;
         return (
