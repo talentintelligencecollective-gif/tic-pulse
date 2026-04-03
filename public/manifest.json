@@ -49,15 +49,7 @@
       "purpose": "any maskable"
     }
   ],
-  "screenshots": [
-    {
-      "src": "/screenshots/feed.png",
-      "sizes": "390x844",
-      "type": "image/png",
-      "form_factor": "narrow",
-      "label": "TIC Pulse news feed"
-    }
-  ],
+
   "shortcuts": [
     {
       "name": "News Feed",
