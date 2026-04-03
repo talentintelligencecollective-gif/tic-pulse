@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, Component } from "react";
 import { supabase, fetchArticles, incrementEngagement, trackInteraction, fetchUserAffinities } from "./supabase.js";
 import AuthPage from "./AuthPage.jsx";
 import ArticleCard from "./ArticleCard.jsx";
@@ -9,6 +9,32 @@ import {
   SearchIcon, CloseIcon, TrendingIcon, BookmarkIcon,
   FeedIcon, DiscoverIcon, PeopleIcon, NewsletterIcon,
 } from "./Icons.jsx";
+
+// ─── Error Boundary — prevents white-screen crashes ───
+
+class ErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { hasError: false, error: null }; }
+  static getDerivedStateFromError(error) { return { hasError: true, error }; }
+  componentDidCatch(error, info) { console.error("TIC Pulse crash:", error, info); }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ minHeight: "100vh", background: "#000", display: "flex", alignItems: "center", justifyContent: "center", padding: "24px" }}>
+          <div style={{ textAlign: "center", maxWidth: "320px" }}>
+            <div style={{ fontSize: "40px", marginBottom: "16px", opacity: 0.5 }}>⚡</div>
+            <h2 style={{ fontSize: "18px", fontWeight: 700, color: "#fff", margin: "0 0 8px", fontFamily: "Georgia, serif" }}>Something went wrong</h2>
+            <p style={{ fontSize: "13px", color: "#888", lineHeight: 1.5, margin: "0 0 20px" }}>TIC Pulse hit an unexpected error. Try refreshing the page.</p>
+            <button onClick={() => window.location.reload()} style={{
+              background: "#00e5a0", border: "none", borderRadius: "12px", color: "#000",
+              padding: "10px 24px", fontSize: "13px", fontWeight: 700, cursor: "pointer",
+            }}>Refresh</button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 // ─── Constants ───
 
@@ -99,7 +125,11 @@ export default function App() {
   }
 
   if (!session) return <AuthPage onAuth={(s) => setSession(s)} />;
-  return <PulseApp session={session} />;
+  return (
+    <ErrorBoundary>
+      <PulseApp session={session} />
+    </ErrorBoundary>
+  );
 }
 
 // ═══════════════════════════════════════════════
@@ -138,6 +168,17 @@ function PulseApp({ session }) {
 
   const likedIdsRef = useRef(likedIds);
   useEffect(() => { likedIdsRef.current = likedIds; }, [likedIds]);
+
+  // Ref for articles — prevents stale closures in handlers
+  const articlesRef = useRef(articles);
+  useEffect(() => { articlesRef.current = articles; }, [articles]);
+
+  // Debounced search — prevents re-filtering on every keystroke
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(searchQuery), 250);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   const searchInputRef = useRef(null);
 
@@ -228,15 +269,15 @@ function PulseApp({ session }) {
       // Category filter
       if (activeCategory !== "All" && a.category !== activeCategory) return false;
 
-      // Region filter
+      // Region filter — null/unknown regions only show under "All"
       if (activeRegion !== "All") {
-        const articleRegion = REGION_MAP[a.region] || "North America";
+        const articleRegion = REGION_MAP[a.region] || null;
         if (articleRegion !== activeRegion) return false;
       }
 
-      // Search filter
-      if (searchQuery) {
-        const q = searchQuery.toLowerCase();
+      // Search filter (debounced)
+      if (debouncedSearch) {
+        const q = debouncedSearch.toLowerCase();
         return (
           (a.title || "").toLowerCase().includes(q) ||
           (a.tldr || "").toLowerCase().includes(q) ||
@@ -263,7 +304,7 @@ function PulseApp({ session }) {
     return filtered.sort((a, b) =>
       new Date(b.published_at || b.created_at) - new Date(a.published_at || a.created_at)
     );
-  }, [articles, activeCategory, activeRegion, searchQuery, sortMode, affinities]);
+  }, [articles, activeCategory, activeRegion, debouncedSearch, sortMode, affinities]);
 
   useEffect(() => {
     if (searchOpen && searchInputRef.current) searchInputRef.current.focus();
@@ -303,10 +344,10 @@ function PulseApp({ session }) {
 
     // Track for personalisation (only on like, not unlike)
     if (!wasLiked) {
-      const article = articles.find(a => a.id === articleId);
+      const article = articlesRef.current.find(a => a.id === articleId);
       if (article) trackInteraction(userId, articleId, "like", article);
     }
-  }, [userId, articles]);
+  }, [userId]);
 
   // ─── Server-side Bookmark Handler ───
   const handleBookmark = useCallback((articleId) => {
@@ -331,10 +372,10 @@ function PulseApp({ session }) {
 
     // Track for personalisation (only on bookmark, not unbookmark)
     if (!wasBookmarked) {
-      const article = articles.find(a => a.id === articleId);
+      const article = articlesRef.current.find(a => a.id === articleId);
       if (article) trackInteraction(userId, articleId, "bookmark", article);
     }
-  }, [userId, bookmarkedIds, showToast, articles]);
+  }, [userId, bookmarkedIds, showToast]);
 
   const handleShare = useCallback((article) => {
     setShareTarget(article);
