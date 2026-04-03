@@ -16,9 +16,9 @@
 [context.deploy-preview.environment]
   NODE_VERSION = "20"
 
-# Scheduled function: fetch GDELT articles every 30 minutes
+# Scheduled function: drip-feed every 5 minutes (v3)
 [functions."fetch-gdelt"]
-  schedule = "*/30 * * * *"
+  schedule = "*/5 * * * *"
 
 # Headers for security and caching
 [[headers]]
