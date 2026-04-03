@@ -146,3 +146,71 @@ export async function fetchUserAffinities(userId) {
   }
   return affinities;
 }
+
+// ═══════════════════════════════════════════════
+//  NEWSLETTER & BRAND GUIDELINES
+//  (used by NewsletterBuilder.jsx)
+// ═══════════════════════════════════════════════
+
+/**
+ * Load user's saved newsletter preferences (theme, sender name, etc.)
+ */
+export async function loadUserPreferences(userId) {
+  if (!userId) return null;
+  try {
+    const { data, error } = await supabase
+      .from("user_engagement")
+      .select("newsletter_prefs")
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (error || !data) return null;
+    return data.newsletter_prefs || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Save user's newsletter preferences
+ */
+export async function saveUserPreferences(userId, prefs) {
+  if (!userId) return;
+  try {
+    await supabase.from("user_engagement").upsert({
+      user_id: userId,
+      newsletter_prefs: prefs,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "user_id" });
+  } catch (e) {
+    console.error("saveUserPreferences error:", e.message);
+  }
+}
+
+/**
+ * Look up brand guidelines for a company name.
+ * Returns the full colour palette + typography for newsletter theming.
+ */
+export async function lookupBrandGuidelines(companyName) {
+  if (!companyName) return null;
+  try {
+    const { data, error } = await supabase
+      .from("brand_guidelines")
+      .select("*")
+      .ilike("company_name", `%${companyName}%`)
+      .limit(1)
+      .maybeSingle();
+    if (error || !data) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Send newsletter email via edge function (placeholder).
+ * Currently downloads HTML — email sending requires a backend email service.
+ */
+export async function sendNewsletterEmail({ to, subject, html }) {
+  console.log("sendNewsletterEmail called — email delivery requires backend integration (e.g. Resend, SendGrid).");
+  return { ok: false, message: "Email sending not yet configured. Use 'Download HTML' or 'Copy to clipboard' instead." };
+}
