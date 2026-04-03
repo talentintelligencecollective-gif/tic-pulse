@@ -6,7 +6,7 @@ const SHELL_ASSETS = [
   "/",
   "/tic-head.png",
   "/tic-logo-full.png",
-  "/icons/icon-192x192.png",
+  "/icons/icon-192.png",
 ];
 
 // Install: cache app shell
