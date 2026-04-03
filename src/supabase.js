@@ -38,7 +38,11 @@ export async function fetchArticles({ category, search, limit = 200, offset = 0 
   }
 
   if (search) {
-    query = query.or(`title.ilike.%${search}%,tldr.ilike.%${search}%`);
+    // Sanitise: escape PostgREST special chars to prevent filter injection
+    const safe = search.replace(/[%_\\()"',.*]/g, "");
+    if (safe.length > 0) {
+      query = query.or(`title.ilike.%${safe}%,tldr.ilike.%${safe}%`);
+    }
   }
 
   const { data, error } = await query;
