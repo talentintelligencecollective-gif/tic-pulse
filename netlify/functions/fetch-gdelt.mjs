@@ -1,8 +1,9 @@
 // ═══════════════════════════════════════════════════════════════
 //  TIC Pulse — News Fetch + Summarise Pipeline (v3)
-//  Uses Google News RSS (free, reliable, no API key needed)
-//  Now extracts images from RSS media:content + improved og:image
-//  Netlify Scheduled Function (runs every 30 minutes)
+//  Drip-feed: runs every 5 minutes, fetches 2-3 RSS feeds
+//  and summarises 3 articles per run.
+//  ~50 queries × 5 core geographies = global coverage.
+//  Netlify Scheduled Function — stays well under 60s timeout.
 // ═══════════════════════════════════════════════════════════════
 
 import { createClient } from "@supabase/supabase-js";
@@ -10,20 +11,105 @@ import { createClient } from "@supabase/supabase-js";
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
-const SUMMARISE_BATCH_SIZE = 10;
+const SUMMARISE_BATCH_SIZE = 3; // Only 3 per run — stays well under 60s
+
+// ═══════════════════════════════════════════════
+//  QUERIES — ~50 covering all TI domains
+// ═══════════════════════════════════════════════
 
 const NEWS_QUERIES = [
-  "talent acquisition OR talent strategy",
-  "workforce planning OR strategic workforce",
-  "skills gap OR reskilling OR upskilling",
-  "CHRO OR chief people officer",
-  "pay transparency OR compensation strategy",
-  "future of work OR AI workforce automation",
-  "labour market trends OR employment trends",
-  "employer branding OR talent mobility",
-  "skills taxonomy OR skills based hiring",
-  "HR technology OR people analytics",
+  // Talent strategy & acquisition
+  "talent acquisition strategy",
+  "talent intelligence analytics",
+  "talent management strategy",
+  "talent mobility internal hiring",
+  "employer branding talent attraction",
+  "recruitment technology hiring",
+  "candidate experience recruiting",
+  // Workforce planning & strategy
+  "workforce planning strategy",
+  "strategic workforce analytics",
+  "workforce intelligence insights",
+  "workforce transformation strategy",
+  "headcount planning forecasting",
+  // Skills
+  "skills based hiring strategy",
+  "skills gap reskilling upskilling",
+  "skills taxonomy workforce",
+  "skills intelligence analytics",
+  "credentialing microcredentials workforce",
+  // People analytics & HR tech
+  "people analytics HR",
+  "people intelligence workforce data",
+  "HR technology people analytics",
+  "human capital analytics insights",
+  // Executive & leadership moves
+  "CHRO chief people officer appointed",
+  "chief human resources officer",
+  "VP talent acquisition appointed",
+  "head of people appointed",
+  "SVP president human resources appointed",
+  "leadership appointment executive moves",
+  // Compensation & pay
+  "pay transparency compensation",
+  "salary benchmarking compensation strategy",
+  "executive compensation pay equity",
+  "total rewards benefits strategy",
+  // Labour market & economics
+  "labour market trends employment",
+  "labor market unemployment jobs",
+  "labour economics workforce shortage",
+  "jobs report employment data",
+  "labour strategy workforce economics",
+  // Automation & AI
+  "AI workforce automation",
+  "agentic AI future of work",
+  "AI replacing jobs automation",
+  "generative AI HR workforce",
+  "automation productivity workforce",
+  // DEI
+  "diversity equity inclusion workplace",
+  "DEI strategy workforce",
+  "belonging inclusion workforce",
+  // Competitor & market intelligence
+  "competitor intelligence business strategy",
+  "market intelligence analysis",
+  "OSINT open source intelligence",
+  // Remote & hybrid work
+  "remote work hybrid return to office",
+  "distributed workforce strategy",
+  // Organisational design
+  "organisational design restructuring",
+  "org design workforce transformation",
+  // Productivity & performance
+  "employee productivity performance management",
+  "employee engagement retention strategy",
 ];
+
+// ═══════════════════════════════════════════════
+//  GEOGRAPHIES — 5 core (English), 4 secondary
+// ═══════════════════════════════════════════════
+
+const CORE_GEOS = [
+  { code: "US", hl: "en", gl: "US", ceid: "US:en" },
+  { code: "GB", hl: "en", gl: "GB", ceid: "GB:en" },
+  { code: "AU", hl: "en", gl: "AU", ceid: "AU:en" },
+  { code: "IN", hl: "en", gl: "IN", ceid: "IN:en" },
+  { code: "SG", hl: "en", gl: "SG", ceid: "SG:en" },
+];
+
+const SECONDARY_GEOS = [
+  { code: "CA", hl: "en", gl: "CA", ceid: "CA:en" },
+  { code: "DE", hl: "en", gl: "DE", ceid: "DE:en" },
+  { code: "AE", hl: "en", gl: "AE", ceid: "AE:en" },
+  { code: "ZA", hl: "en", gl: "ZA", ceid: "ZA:en" },
+];
+
+const ALL_GEOS = [...CORE_GEOS, ...SECONDARY_GEOS];
+
+// ═══════════════════════════════════════════════
+//  CATEGORIES & CLASSIFICATION
+// ═══════════════════════════════════════════════
 
 const VALID_CATEGORIES = [
   "Talent Strategy", "Labour Market", "Automation", "Executive Moves",
@@ -40,53 +126,113 @@ const DOMAIN_MAP = {
   "technologyreview.com": "MIT Technology Review", "shrm.org": "SHRM",
   "peoplemanagement.co.uk": "People Management", "linkedin.com": "LinkedIn",
   "mckinsey.com": "McKinsey", "bcg.com": "BCG", "deloitte.com": "Deloitte",
+  "livemint.com": "Mint", "economictimes.com": "Economic Times",
+  "straitstimes.com": "Straits Times", "smh.com.au": "Sydney Morning Herald",
+  "afr.com": "Australian Financial Review", "globeandmail.com": "Globe and Mail",
+  "businessinsider.com": "Business Insider", "hrdive.com": "HR Dive",
+  "personneltoday.com": "Personnel Today", "cipd.org": "CIPD",
 };
+
+// ═══════════════════════════════════════════════
+//  RELEVANCE FILTER — reject off-topic articles
+// ═══════════════════════════════════════════════
+
+const RELEVANCE_KEYWORDS = [
+  "talent", "workforce", "hiring", "recruit", "AI", "agent", "leadership",
+  "skill", "automat", "job", "labor", "labour", "human capital", "productiv",
+  "transform", "econom", "incentive", "nudge", "bias", "decision", "data",
+  "management", "organization", "organisation", "CHRO", "HR", "people",
+  "compens", "salary", "wage", "pay", "DEI", "divers", "inclusion",
+  "remote", "hybrid", "future of work", "headcount", "reskill", "upskill",
+  "employ", "candidate", "retention", "engag", "analytics", "intelligence",
+  "OSINT", "competitor", "benchmark", "restructur", "layoff", "retrench",
+];
+
+function isRelevant(title) {
+  const lower = (title || "").toLowerCase();
+  return RELEVANCE_KEYWORDS.some(k => lower.includes(k));
+}
+
+// ═══════════════════════════════════════════════
+//  DRIP-FEED ROTATION
+// ═══════════════════════════════════════════════
+
+function getRunPairs(count) {
+  // Create all (query, geo) pairs
+  const allPairs = [];
+  for (const query of NEWS_QUERIES) {
+    for (const geo of CORE_GEOS) {
+      allPairs.push({ query, geo });
+    }
+  }
+  // Add secondary geos for a subset of queries (every 3rd query)
+  for (let i = 0; i < NEWS_QUERIES.length; i += 3) {
+    for (const geo of SECONDARY_GEOS) {
+      allPairs.push({ query: NEWS_QUERIES[i], geo });
+    }
+  }
+
+  // Use time-based index to rotate through pairs
+  const runIndex = Math.floor(Date.now() / (5 * 60 * 1000)) % allPairs.length;
+  const selected = [];
+  for (let i = 0; i < count; i++) {
+    selected.push(allPairs[(runIndex + i) % allPairs.length]);
+  }
+  return selected;
+}
+
+// ═══════════════════════════════════════════════
+//  RSS FETCHING
+// ═══════════════════════════════════════════════
 
 function getSupabase() {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) throw new Error("Missing Supabase env vars");
   return createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 }
 
-function buildRssUrl(query) {
-  return `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en&gl=US&ceid=US:en`;
+function buildRssUrl(query, geo) {
+  return `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=${geo.hl}&gl=${geo.gl}&ceid=${geo.ceid}`;
 }
 
-async function fetchNewsArticles() {
+async function fetchRssForPairs(pairs) {
   const allArticles = [];
   const seenUrls = new Set();
 
-  for (const query of NEWS_QUERIES) {
+  for (const { query, geo } of pairs) {
     try {
-      const response = await fetch(buildRssUrl(query), {
+      const response = await fetch(buildRssUrl(query, geo), {
         headers: { "User-Agent": "TIC-Pulse/1.0", "Accept": "application/xml, text/xml" },
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(10000),
       });
-      if (!response.ok) { console.warn(`RSS ${response.status} for: ${query.slice(0,40)}`); continue; }
+      if (!response.ok) { console.warn(`RSS ${response.status} for: ${query.slice(0, 30)} [${geo.code}]`); continue; }
 
       const xml = await response.text();
       const items = parseRssXml(xml);
 
       for (const item of items) {
         if (seenUrls.has(item.url)) continue;
+        if (!isRelevant(item.title)) continue;
         seenUrls.add(item.url);
         allArticles.push({
-          gdelt_url: item.url, title: item.title,
-          source_name: item.source, source_domain: extractDomain(item.url),
-          image_url: item.image || null, // ← NEW: capture RSS image
-          gdelt_tone: null, language: "English",
+          gdelt_url: item.url,
+          title: item.title,
+          source_name: item.source,
+          source_domain: extractDomain(item.url),
+          image_url: null,
+          gdelt_tone: null,
+          language: "English",
+          region: geo.code,
           published_at: item.pubDate || new Date().toISOString(),
         });
       }
-      console.log(`Got ${items.length} articles (${items.filter(i => i.image).length} with images) for: ${query.slice(0,40)}`);
+      console.log(`Got ${items.length} items (${allArticles.length} relevant) for: ${query.slice(0, 30)} [${geo.code}]`);
     } catch (err) {
-      console.error(`RSS error "${query.slice(0,40)}":`, err.message);
+      console.error(`RSS error "${query.slice(0, 30)} [${geo.code}]":`, err.message);
     }
   }
-  console.log(`Total: ${allArticles.length} articles`);
+  console.log(`Total fetched: ${allArticles.length} relevant articles`);
   return allArticles;
 }
-
-// ─── RSS parser — now extracts media:content and enclosure images ───
 
 function parseRssXml(xml) {
   const items = [];
@@ -98,69 +244,17 @@ function parseRssXml(xml) {
     const link = extractTag(x, "link");
     const pubDate = extractTag(x, "pubDate");
     const source = extractTag(x, "source");
-
-    // ─── NEW: Extract image from RSS media tags ───
-    const image = extractRssImage(x);
-
     if (title && link) {
       const realUrl = extractRealUrl(link);
       items.push({
-        title: decodeEntities(title), url: realUrl,
+        title: decodeEntities(title),
+        url: realUrl,
         source: source ? decodeEntities(source) : extractSourceFromUrl(realUrl),
         pubDate: pubDate ? new Date(pubDate).toISOString() : null,
-        image: image || null,
       });
     }
   }
   return items;
-}
-
-// ─── NEW: Extract image URL from RSS media tags ───
-
-function extractRssImage(itemXml) {
-  // Try media:content (Google News uses this)
-  // Matches: <media:content url="https://..." medium="image" .../>
-  // Also: <media:content url="https://..." width="..." height="..." medium="image">
-  const mediaContent = itemXml.match(/<media:content[^>]+url=["']([^"']+)["'][^>]*>/i);
-  if (mediaContent) {
-    const url = mediaContent[1].trim();
-    if (isValidImageUrl(url)) return url;
-  }
-
-  // Try media:thumbnail
-  const mediaThumbnail = itemXml.match(/<media:thumbnail[^>]+url=["']([^"']+)["'][^>]*>/i);
-  if (mediaThumbnail) {
-    const url = mediaThumbnail[1].trim();
-    if (isValidImageUrl(url)) return url;
-  }
-
-  // Try enclosure with image type
-  const enclosure = itemXml.match(/<enclosure[^>]+url=["']([^"']+)["'][^>]*type=["']image\/[^"']+["'][^>]*>/i);
-  if (enclosure) {
-    const url = enclosure[1].trim();
-    if (isValidImageUrl(url)) return url;
-  }
-
-  // Try enclosure with image type in reverse attribute order
-  const enclosure2 = itemXml.match(/<enclosure[^>]+type=["']image\/[^"']+["'][^>]+url=["']([^"']+)["'][^>]*>/i);
-  if (enclosure2) {
-    const url = enclosure2[1].trim();
-    if (isValidImageUrl(url)) return url;
-  }
-
-  return null;
-}
-
-// Validate that a URL looks like a real image (not a tracking pixel or icon)
-function isValidImageUrl(url) {
-  if (!url || url.length < 20) return false;
-  // Reject common tracking/pixel patterns
-  if (url.includes("1x1") || url.includes("pixel") || url.includes("tracking")) return false;
-  // Reject tiny icons
-  if (url.includes("favicon") || url.includes("icon-")) return false;
-  // Must be http(s)
-  if (!url.startsWith("http")) return false;
-  return true;
 }
 
 function extractTag(xml, tag) {
@@ -189,12 +283,19 @@ function extractSourceFromUrl(url) {
 }
 
 function decodeEntities(t) {
-  return t.replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&nbsp;/g," ").replace(/<[^>]+>/g,"");
+  return t.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ").replace(/<[^>]+>/g, "");
 }
+
+// ═══════════════════════════════════════════════
+//  STORAGE — dedup + insert with region tagging
+// ═══════════════════════════════════════════════
 
 async function storeNewArticles(supabase, articles) {
   if (!articles.length) return 0;
   const capped = articles.slice(0, 200);
+
+  // Batch dedup in chunks of 50
   const existingUrls = new Set();
   for (let i = 0; i < capped.length; i += 50) {
     const batch = capped.slice(i, i + 50).map(a => a.gdelt_url);
@@ -202,8 +303,10 @@ async function storeNewArticles(supabase, articles) {
     if (error) { console.error("Lookup error:", error.message); continue; }
     (data || []).forEach(r => existingUrls.add(r.gdelt_url));
   }
+
   const newArticles = capped.filter(a => !existingUrls.has(a.gdelt_url));
   if (!newArticles.length) { console.log("No new articles"); return 0; }
+
   let inserted = 0;
   for (let i = 0; i < newArticles.length; i += 20) {
     const batch = newArticles.slice(i, i + 20);
@@ -211,17 +314,23 @@ async function storeNewArticles(supabase, articles) {
     if (error) console.error("Insert error:", error.message);
     else inserted += batch.length;
   }
-  console.log(`Stored ${inserted} new articles (${newArticles.filter(a => a.image_url).length} with RSS images)`);
+  console.log(`Stored ${inserted} new articles`);
   return inserted;
 }
 
-// ─── Summarisation — now checks for existing RSS image before scraping ───
+// ═══════════════════════════════════════════════
+//  SUMMARISATION — Claude-powered, 3 per run
+// ═══════════════════════════════════════════════
 
 async function summariseArticles(supabase) {
-  if (!ANTHROPIC_KEY) { console.warn("No ANTHROPIC_API_KEY"); return 0; }
+  if (!ANTHROPIC_KEY) { console.warn("No ANTHROPIC_API_KEY — skipping summarisation"); return 0; }
+
   const { data: unsummarised, error } = await supabase.from("articles")
-    .select("id, title, source_name, source_domain, gdelt_url, image_url")
-    .eq("summarised", false).order("created_at", { ascending: true }).limit(SUMMARISE_BATCH_SIZE);
+    .select("id, title, source_name, source_domain, gdelt_url")
+    .eq("summarised", false)
+    .order("created_at", { ascending: true })
+    .limit(SUMMARISE_BATCH_SIZE);
+
   if (error || !unsummarised?.length) { console.log("Nothing to summarise"); return 0; }
 
   console.log(`Summarising ${unsummarised.length} articles...`);
@@ -229,27 +338,30 @@ async function summariseArticles(supabase) {
 
   for (const article of unsummarised) {
     try {
-      // Only scrape for image if we don't already have one from RSS
-      const needsImage = !article.image_url;
-      const ctx = await fetchArticleContext(article.gdelt_url, needsImage);
+      const ctx = await fetchArticleContext(article.gdelt_url);
       const result = await callClaude(article, ctx?.text);
-      const upd = { tldr: result.tldr, category: result.category, tags: result.tags, read_time_min: result.readTime, summarised: true };
-
-      // Image priority: existing RSS image > scraped og:image
-      if (!article.image_url && ctx?.image) {
-        upd.image_url = ctx.image;
-      }
-
+      const upd = {
+        tldr: result.tldr,
+        category: result.category,
+        tags: result.tags,
+        read_time_min: result.readTime,
+        summarised: true,
+      };
+      if (ctx?.image) upd.image_url = ctx.image;
       const { error: ue } = await supabase.from("articles").update(upd).eq("id", article.id);
       if (!ue) {
+        // Ensure article_engagement row exists
         await supabase.from("article_engagement").insert({ article_id: article.id }).select().maybeSingle();
         count++;
       }
     } catch (err) {
-      console.error(`Error "${article.title.slice(0,50)}":`, err.message);
+      console.error(`Error "${article.title.slice(0, 50)}":`, err.message);
+      // Fallback: classify by keyword so article still appears in feed
       await supabase.from("articles").update({
         tldr: `${article.title}. From ${article.source_name || article.source_domain}.`,
-        category: classifyByKeyword(article.title), tags: extractHashtags(article.title), summarised: true,
+        category: classifyByKeyword(article.title),
+        tags: extractHashtags(article.title),
+        summarised: true,
       }).eq("id", article.id);
     }
   }
@@ -257,9 +369,7 @@ async function summariseArticles(supabase) {
   return count;
 }
 
-// ─── Article context scraper — improved with more meta tag patterns ───
-
-async function fetchArticleContext(url, needsImage = true) {
+async function fetchArticleContext(url) {
   try {
     if (url.includes("news.google.com")) return null;
     const r = await fetch(url, {
@@ -268,32 +378,8 @@ async function fetchArticleContext(url, needsImage = true) {
     });
     if (!r.ok) return null;
     const html = await r.text();
-
-    let image = null;
-    if (needsImage) {
-      // Try multiple meta tag patterns (most reliable first)
-      image = extractMeta(html, 'property="og:image"')
-        || extractMeta(html, 'name="twitter:image"')
-        || extractMeta(html, 'name="twitter:image:src"')
-        || extractMeta(html, 'property="og:image:url"')
-        || extractMeta(html, 'itemprop="image"')
-        || extractImageSrc(html)
-        || null;
-
-      // Validate the image URL
-      if (image && !isValidImageUrl(image)) image = null;
-
-      // Ensure absolute URL
-      if (image && !image.startsWith("http")) {
-        try {
-          image = new URL(image, url).href;
-        } catch { image = null; }
-      }
-    }
-
-    const desc = extractMeta(html, 'property="og:description"')
-      || extractMeta(html, 'name="description"');
-
+    const image = extractMeta(html, 'property="og:image"') || extractMeta(html, 'name="twitter:image"');
+    const desc = extractMeta(html, 'property="og:description"') || extractMeta(html, 'name="description"');
     return { image, text: desc };
   } catch { return null; }
 }
@@ -303,19 +389,6 @@ function extractMeta(html, attr) {
   const p2 = new RegExp(`<meta\\s+[^>]*content=["']([^"']{10,500})["'][^>]*${attr}`, "i");
   const m = html.match(p1) || html.match(p2);
   return m ? decodeEntities(m[1].trim()) : null;
-}
-
-// NEW: Try to extract image from <link rel="image_src"> or first large <img>
-function extractImageSrc(html) {
-  // Try link rel="image_src"
-  const linkImg = html.match(/<link[^>]+rel=["']image_src["'][^>]+href=["']([^"']{10,500})["']/i);
-  if (linkImg) return decodeEntities(linkImg[1].trim());
-
-  // Try link with reversed attributes
-  const linkImg2 = html.match(/<link[^>]+href=["']([^"']{10,500})["'][^>]+rel=["']image_src["']/i);
-  if (linkImg2) return decodeEntities(linkImg2[1].trim());
-
-  return null;
 }
 
 async function callClaude(article, description) {
@@ -332,7 +405,7 @@ Respond with ONLY valid JSON (no markdown fences, no preamble):
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01" },
     body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 500, messages: [{ role: "user", content: prompt }] }),
-    signal: AbortSignal.timeout(30000),
+    signal: AbortSignal.timeout(25000),
   });
   if (!response.ok) throw new Error(`Claude ${response.status}`);
   const data = await response.json();
@@ -347,17 +420,21 @@ Respond with ONLY valid JSON (no markdown fences, no preamble):
   return result;
 }
 
+// ═══════════════════════════════════════════════
+//  FALLBACK CLASSIFIERS
+// ═══════════════════════════════════════════════
+
 function classifyByKeyword(title) {
   const l = (title || "").toLowerCase();
   const rules = [
-    [["chro","chief people","chief human","executive appoint","c-suite"],"Executive Moves"],
-    [["pay transpar","compensation","salary","wage","benefits"],"Compensation"],
-    [["automat","agentic","robot","ai replac","future of work"],"Automation"],
-    [["skill","reskill","upskill","taxonomy","credential"],"Skills"],
-    [["diversity","inclusion","equity","dei","belonging"],"DEI"],
-    [["workforce plan","headcount","strategic workforce"],"Workforce Planning"],
-    [["labour market","labor market","unemploy","job market","vacancy"],"Labour Market"],
-    [["talent","recruit","hiring","candidate","employer brand"],"Talent Strategy"],
+    [["chro", "chief people", "chief human", "executive appoint", "c-suite", "appointed", "head of people", "vp talent", "svp human"], "Executive Moves"],
+    [["pay transpar", "compensation", "salary", "wage", "benefits", "total rewards", "pay equity"], "Compensation"],
+    [["automat", "agentic", "robot", "ai replac", "future of work", "generative ai"], "Automation"],
+    [["skill", "reskill", "upskill", "taxonomy", "credential", "microcredential"], "Skills"],
+    [["diversity", "inclusion", "equity", "dei", "belonging"], "DEI"],
+    [["workforce plan", "headcount", "strategic workforce"], "Workforce Planning"],
+    [["labour market", "labor market", "unemploy", "job market", "vacancy", "jobs report", "employment data"], "Labour Market"],
+    [["talent", "recruit", "hiring", "candidate", "employer brand", "people analytics", "hr tech"], "Talent Strategy"],
   ];
   for (const [kws, cat] of rules) { if (kws.some(k => l.includes(k))) return cat; }
   return "Talent Strategy";
@@ -365,26 +442,51 @@ function classifyByKeyword(title) {
 
 function extractHashtags(title) {
   const l = (title || "").toLowerCase();
-  const m = { ai:"#AI", talent:"#TalentStrategy", recruit:"#Recruitment", skill:"#Skills",
-    chro:"#CHRO", automat:"#Automation", workforce:"#Workforce", salary:"#Compensation",
-    pay:"#PayTransparency", divers:"#DEI", remote:"#RemoteWork", hybrid:"#HybridWork" };
+  const m = {
+    ai: "#AI", talent: "#TalentStrategy", recruit: "#Recruitment", skill: "#Skills",
+    chro: "#CHRO", automat: "#Automation", workforce: "#Workforce", salary: "#Compensation",
+    pay: "#PayTransparency", divers: "#DEI", remote: "#RemoteWork", hybrid: "#HybridWork",
+    analytics: "#Analytics", intelligence: "#TalentIntelligence", leadership: "#Leadership",
+  };
   const tags = [];
   for (const [k, v] of Object.entries(m)) { if (l.includes(k) && !tags.includes(v)) tags.push(v); if (tags.length >= 3) break; }
   return tags.length ? tags : ["#TalentIntelligence"];
 }
 
+// ═══════════════════════════════════════════════
+//  HANDLER — orchestrates fetch + summarise each run
+// ═══════════════════════════════════════════════
+
 export default async function handler(req) {
   const start = Date.now();
-  console.log("═══ TIC Pulse: News Fetch Started (v3 — with image extraction) ═══");
+  const runId = Math.floor(Date.now() / (5 * 60 * 1000)) % 1000;
+  console.log(`═══ TIC Pulse v3: Run #${runId} Started ═══`);
+
   try {
     const supabase = getSupabase();
-    const articles = await fetchNewsArticles();
+
+    // Step 1: Fetch RSS from 3 rotating (query, geo) pairs
+    const pairs = getRunPairs(3);
+    console.log(`Fetching: ${pairs.map(p => `${p.query.slice(0, 30)}… [${p.geo.code}]`).join(", ")}`);
+    const articles = await fetchRssForPairs(pairs);
     const stored = await storeNewArticles(supabase, articles);
+
+    // Step 2: Summarise 3 unsummarised articles from the backlog
     const summarised = await summariseArticles(supabase);
+
     const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-    console.log(`═══ Done: ${stored} stored, ${summarised} summarised in ${elapsed}s ═══`);
-    return new Response(JSON.stringify({ ok: true, fetched: articles.length, stored, summarised, elapsed: `${elapsed}s` }),
-      { status: 200, headers: { "Content-Type": "application/json" } });
+    console.log(`═══ Run #${runId} Done: ${stored} stored, ${summarised} summarised in ${elapsed}s ═══`);
+
+    return new Response(JSON.stringify({
+      ok: true,
+      run: runId,
+      pairs: pairs.map(p => ({ query: p.query.slice(0, 40), geo: p.geo.code })),
+      fetched: articles.length,
+      stored,
+      summarised,
+      elapsed: `${elapsed}s`,
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+
   } catch (err) {
     console.error("Pipeline error:", err);
     return new Response(JSON.stringify({ ok: false, error: err.message }),
@@ -392,4 +494,5 @@ export default async function handler(req) {
   }
 }
 
-export const config = { schedule: "*/30 * * * *" };
+// ─── Run every 5 minutes ───
+export const config = { schedule: "*/5 * * * *" };
