@@ -109,7 +109,7 @@ function CategoryFallbackSvg({ category, width = 347, height = 200 }) {
 export default function ArticleCard({
   article, index, user, onLike, onBookmark, onShare,
   isLiked, isBookmarked, isSelected, onToggleSelect,
-  isHero, onLongPress,
+  isHero, onLongPress, autoExpandComments,
 }) {
   const [showComments, setShowComments] = useState(false);
   const [imgError, setImgError] = useState(false);
@@ -117,11 +117,23 @@ export default function ArticleCard({
   const [commentText, setCommentText] = useState("");
   const [commentCount, setCommentCount] = useState(article.comment_count || 0);
   const [submitting, setSubmitting] = useState(false);
+  const cardRef = useRef(null);
 
   const color = CAT_COLORS[article.category] || "#00E5B8";
   const hasImage = article.image_url && !imgError;
   const timeDisplay = formatRelativeTime(article.published_at || article.created_at);
   const readTime = article.read_time_min || (article.tldr ? Math.max(1, Math.ceil(article.tldr.split(/\s+/).length / 200)) : null);
+
+  // Auto-expand comments when triggered from preview overlay
+  useEffect(() => {
+    if (autoExpandComments && !showComments) {
+      setShowComments(true);
+      // Scroll card into view after a tick so the comments section renders
+      setTimeout(() => {
+        cardRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 100);
+    }
+  }, [autoExpandComments]);
 
   // ─── Long-press handling ───
   const longPressTimer = useRef(null);
@@ -279,6 +291,7 @@ export default function ArticleCard({
   if (isHero) {
     return (
       <article
+        ref={cardRef}
         onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd} onTouchCancel={handleTouchEnd}
         onMouseDown={handleMouseDown} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp}
         style={{
@@ -378,6 +391,7 @@ export default function ArticleCard({
 
   return (
     <article
+      ref={cardRef}
       onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd} onTouchCancel={handleTouchEnd}
       onMouseDown={handleMouseDown} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp}
       style={{
