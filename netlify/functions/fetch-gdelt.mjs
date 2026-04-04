@@ -12,8 +12,8 @@ const SUPABASE_URL = process.env.VITE_SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
 
-// ─── Summarisation: 3 per run keeps us safely under 60s ───
-const SUMMARISE_BATCH_SIZE = 3;
+// ─── Summarisation: 5 per run keeps us safely under 60s ───
+const SUMMARISE_BATCH_SIZE = 5;
 
 // ═══════════════════════════════════════════════
 //  SEARCH QUERIES — ~50 queries covering full TI landscape
@@ -374,7 +374,10 @@ async function summariseArticles(supabase) {
 
       const { error: ue } = await supabase.from("articles").update(upd).eq("id", article.id);
       if (!ue) {
-        await supabase.from("article_engagement").insert({ article_id: article.id }).select().maybeSingle();
+        // Engagement insert may fail on duplicate — don't let it corrupt the summary
+        try {
+          await supabase.from("article_engagement").insert({ article_id: article.id }).select().maybeSingle();
+        } catch { /* duplicate engagement row is fine */ }
         count++;
       }
     } catch (err) {
