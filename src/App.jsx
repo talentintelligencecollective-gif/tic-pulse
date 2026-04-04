@@ -240,8 +240,8 @@ function PulseApp({ session }) {
     const tagCounts = {};
 
     for (const a of articles) {
-      const pubDate = new Date(a.published_at || a.created_at).getTime();
-      if (pubDate < cutoff) continue;
+      const fetchDate = new Date(a.created_at).getTime();
+      if (fetchDate < cutoff) continue;
       for (const tag of (a.tags || [])) {
         const clean = tag.replace(/^#/, "");
         if (clean.length > 2) {
@@ -260,11 +260,13 @@ function PulseApp({ session }) {
 
   // ─── Client-side filtering + personalisation sorting ───
   const filteredArticles = useMemo(() => {
+    // Freshness: use created_at (when WE fetched it), not published_at (when the source wrote it).
+    // Google News surfaces articles published weeks ago — they're still fresh to our users.
     const freshnessCutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
 
     const filtered = articles.filter((a) => {
-      const pubDate = new Date(a.published_at || a.created_at).getTime();
-      if (pubDate < freshnessCutoff) return false;
+      const fetchDate = new Date(a.created_at).getTime();
+      if (fetchDate < freshnessCutoff) return false;
 
       // Category filter
       if (activeCategory !== "All" && a.category !== activeCategory) return false;
