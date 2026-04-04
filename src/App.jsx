@@ -145,6 +145,7 @@ function PulseApp({ session }) {
   const [shareTarget, setShareTarget] = useState(null);
   const [toast, setToast] = useState({ msg: "", show: false });
   const [previewArticle, setPreviewArticle] = useState(null);
+  const [commentTargetId, setCommentTargetId] = useState(null);
 
   const [selectedIds, setSelectedIds] = useState([]);
   const [showNewsletter, setShowNewsletter] = useState(false);
@@ -194,9 +195,9 @@ function PulseApp({ session }) {
 
   useEffect(() => { loadArticles(); }, [loadArticles]);
 
-  // ─── Client-side filtering (7-day freshness) ───
+  // ─── Client-side filtering (30-day freshness) ───
   const filteredArticles = useMemo(() => {
-    const freshnessCutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const freshnessCutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
     let result = articles.filter((a) => {
       const pubDate = new Date(a.published_at || a.created_at).getTime();
       if (pubDate < freshnessCutoff) return false;
@@ -278,13 +279,21 @@ function PulseApp({ session }) {
   // ─── Preview ───
   const handleLongPress = useCallback((article) => {
     setPreviewArticle(article);
-    // Lock body scroll
     document.body.style.overflow = "hidden";
   }, []);
 
   const handleClosePreview = useCallback(() => {
     setPreviewArticle(null);
     document.body.style.overflow = "";
+  }, []);
+
+  const handlePreviewComment = useCallback((articleId) => {
+    // Close preview and auto-expand comments on the target card
+    setPreviewArticle(null);
+    document.body.style.overflow = "";
+    setCommentTargetId(articleId);
+    // Clear the target after the card has had time to expand
+    setTimeout(() => setCommentTargetId(null), 500);
   }, []);
 
   // ─── Render ───
@@ -308,7 +317,7 @@ function PulseApp({ session }) {
           <FeedView
             articles={filteredArticles} loading={loading} error={error} searchQuery={searchQuery}
             likedIds={likedIds} bookmarkedIds={bookmarkedIds} selectedIds={selectedIdSet}
-            user={session?.user}
+            commentTargetId={commentTargetId} user={session?.user}
             onLike={handleLike} onBookmark={handleBookmark} onShare={handleShare}
             onToggleSelect={handleToggleSelect} onLongPress={handleLongPress}
             onClearFilters={() => { setActiveCategory("All"); setSearchQuery(""); setSearchOpen(false); }}
@@ -362,6 +371,7 @@ function PulseApp({ session }) {
           onLike={() => handleLike(previewArticle.id)}
           onBookmark={() => handleBookmark(previewArticle.id)}
           onShare={() => handleShare(previewArticle)}
+          onComment={() => handlePreviewComment(previewArticle.id)}
           onToggleSelect={handleToggleSelect ? () => handleToggleSelect(previewArticle.id) : null}
           isSelected={selectedIdSet.has(previewArticle.id)}
         />
@@ -538,7 +548,7 @@ function Header({ searchOpen, searchQuery, activeCategory, feedMode, searchInput
 //  ARTICLE PREVIEW — long-press overlay
 // ═══════════════════════════════════════════════
 
-function ArticlePreview({ article, isLiked, isBookmarked, isSelected, onClose, onLike, onBookmark, onShare, onToggleSelect }) {
+function ArticlePreview({ article, isLiked, isBookmarked, isSelected, onClose, onLike, onBookmark, onShare, onComment, onToggleSelect }) {
   const color = CAT_COLORS[article.category] || "#00E5B8";
   const timeDisplay = relDate(article.published_at || article.created_at);
   const readTime = article.read_time_min || (article.tldr ? Math.max(1, Math.ceil(article.tldr.split(/\s+/).length / 200)) : null);
@@ -603,9 +613,10 @@ function ArticlePreview({ article, isLiked, isBookmarked, isSelected, onClose, o
               border: "none", background: "none", cursor: "pointer", padding: 0 }}>
               <HeartIcon filled={isLiked} size={18} /><span>{article.like_count || 0}</span>
             </button>
-            <div style={{ display: "flex", alignItems: "center", gap: 4, color: "#666", fontSize: 11 }}>
+            <button onClick={onComment} style={{ display: "flex", alignItems: "center", gap: 4,
+              color: "#666", fontSize: 11, fontWeight: 500, border: "none", background: "none", cursor: "pointer", padding: 0 }}>
               <CommentIcon size={18} /><span>{article.comment_count || 0}</span>
-            </div>
+            </button>
             <button onClick={onShare} style={{ color: "#666", border: "none", background: "none", cursor: "pointer", padding: 0 }}>
               <ShareIcon size={18} />
             </button>
@@ -655,7 +666,7 @@ function ArticlePreview({ article, isLiked, isBookmarked, isSelected, onClose, o
 // ═══════════════════════════════════════════════
 
 function FeedView({ articles, loading, error, searchQuery, likedIds, bookmarkedIds, selectedIds,
-  user, onLike, onBookmark, onShare, onToggleSelect, onLongPress, onClearFilters, onRetry }) {
+  commentTargetId, user, onLike, onBookmark, onShare, onToggleSelect, onLongPress, onClearFilters, onRetry }) {
   const hasSelections = selectedIds.size > 0;
   return (
     <div style={{ padding: hasSelections ? "8px 14px 180px" : "8px 14px 110px" }}>
@@ -698,6 +709,7 @@ function FeedView({ articles, loading, error, searchQuery, likedIds, bookmarkedI
           <ArticleCard key={article.id} article={article} index={i} user={user}
             isLiked={likedIds.has(article.id)} isBookmarked={bookmarkedIds.has(article.id)}
             isSelected={selectedIds.has(article.id)} isHero={i === 0}
+            autoExpandComments={commentTargetId === article.id}
             onLike={onLike} onBookmark={onBookmark} onShare={onShare}
             onToggleSelect={onToggleSelect} onLongPress={onLongPress}
           />
