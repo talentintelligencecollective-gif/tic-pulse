@@ -1,12 +1,17 @@
-// ─── TIC Pulse Service Worker ───
-// Caches the app shell for offline launch, network-first for articles
+// ═══════════════════════════════════════════════
+//  TIC Pulse — Service Worker (v2)
+//  Provides offline caching + PWA install support
+//  NOTE: Only pre-caches files that definitely exist
+// ═══════════════════════════════════════════════
 
-const CACHE_NAME = "tic-pulse-v1";
+const CACHE_NAME = "tic-pulse-v2";
+
+// ONLY cache assets that definitely exist in the repo
+// If ANY of these 404, the install event FAILS and Chrome
+// won't treat the site as a valid PWA (shortcut instead of app)
 const SHELL_ASSETS = [
   "/",
   "/tic-head.png",
-  "/tic-logo-full.png",
-  "/icons/icon-192.png",
 ];
 
 // Install: cache app shell
@@ -29,17 +34,33 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
-// Fetch: network-first for API/Supabase, cache-first for static assets
+// Fetch: network-first for API, stale-while-revalidate for static
 self.addEventListener("fetch", (event) => {
-  const url = new URL(event.request.url);
+  const { request } = event;
+  const url = new URL(request.url);
 
   // Skip non-GET requests
-  if (event.request.method !== "GET") return;
+  if (request.method !== "GET") return;
 
-  // Network-first for API calls (Supabase, GDELT)
-  if (url.hostname.includes("supabase") || url.hostname.includes("gdelt")) {
+  // Network-only for API calls (Supabase, Netlify functions, Claude)
+  if (
+    url.hostname.includes("supabase") ||
+    url.pathname.includes(".netlify/functions") ||
+    url.hostname.includes("anthropic")
+  ) {
+    return;
+  }
+
+  // Network-first for navigation (HTML pages)
+  if (request.mode === "navigate") {
     event.respondWith(
-      fetch(event.request).catch(() => caches.match(event.request))
+      fetch(request)
+        .then((response) => {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+          return response;
+        })
+        .catch(() => caches.match("/"))
     );
     return;
   }
@@ -49,15 +70,18 @@ self.addEventListener("fetch", (event) => {
     url.pathname.startsWith("/assets/") ||
     url.pathname.startsWith("/icons/") ||
     url.pathname.endsWith(".png") ||
+    url.pathname.endsWith(".jpg") ||
     url.hostname === "fonts.gstatic.com"
   ) {
     event.respondWith(
-      caches.match(event.request).then(
+      caches.match(request).then(
         (cached) =>
           cached ||
-          fetch(event.request).then((response) => {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          fetch(request).then((response) => {
+            if (response.ok) {
+              const clone = response.clone();
+              caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+            }
             return response;
           })
       )
@@ -65,14 +89,16 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Network-first for everything else (HTML pages)
+  // Network-first for everything else
   event.respondWith(
-    fetch(event.request)
+    fetch(request)
       .then((response) => {
-        const clone = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+        if (response.ok) {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+        }
         return response;
       })
-      .catch(() => caches.match(event.request))
+      .catch(() => caches.match(request))
   );
 });
