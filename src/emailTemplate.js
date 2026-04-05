@@ -8,7 +8,7 @@
 //  - Max-width 600px (email standard)
 //  - Web-safe font stacks
 //
-//  Phase 3: Added media items (videos + podcasts) support
+//  Now supports: articles, videos (YouTube), and podcast episodes
 // ═══════════════════════════════════════════════════════════════
 
 /**
@@ -140,48 +140,15 @@ function esc(str) {
 }
 
 /**
- * Generate the full newsletter HTML.
- *
- * @param {Object} options
- * @param {Array} options.articles - Selected articles
- * @param {Array} [options.mediaItems] - Selected videos/episodes
- * @param {Object} options.theme - Theme object from NEWSLETTER_THEMES
- * @param {string} [options.introText] - Optional personal intro paragraph
- * @param {string} [options.senderName] - Name of the person sending
- * @param {string} [options.newsletterTitle] - Custom title
- * @param {string} [options.dateStr] - Date string for the header
- * @returns {string} Complete HTML document string
+ * Generate an article card row for the newsletter.
  */
-export function generateNewsletterHtml({
-  articles,
-  mediaItems = [],
-  theme,
-  introText = "",
-  senderName = "",
-  newsletterTitle = "Talent Intelligence Briefing",
-  dateStr = "",
-}) {
-  const t = theme;
-  const today = dateStr || new Date().toLocaleDateString("en-GB", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
+function generateArticleRow(article, i, t) {
+  const catColor = CAT_COLORS[article.category] || t.accent;
+  const tags = (article.tags || []).slice(0, 3).map((tag) => esc(tag)).join(" &nbsp;·&nbsp; ");
+  const articleUrl = esc(article.gdelt_url || "");
+  const imageUrl = article.image_url || "";
 
-  const isDark = isColorDark(t.bg);
-  const accentText = isColorDark(t.accent) ? "#ffffff" : "#000000";
-
-  // Build article rows
-  const articleRows = articles
-    .map((article, i) => {
-      const catColor = CAT_COLORS[article.category] || t.accent;
-      const tags = (article.tags || []).slice(0, 3).map((tag) => esc(tag)).join(" &nbsp;·&nbsp; ");
-      const articleUrl = esc(article.gdelt_url || "");
-      const imageUrl = article.image_url || "";
-      const sourceAbbr = getSourceAbbr(article.source_name);
-
-      return `
+  return `
     <!-- Article ${i + 1} -->
     <tr>
       <td style="padding: 0 0 20px 0;">
@@ -229,11 +196,171 @@ export function generateNewsletterHtml({
         </table>
       </td>
     </tr>`;
-    })
-    .join("\n");
+}
 
-  // Build media rows (videos + episodes)
-  const mediaRows = mediaItems.length > 0 ? buildMediaSection(mediaItems, t) : "";
+/**
+ * Generate a video card row for the newsletter.
+ */
+function generateVideoRow(video, i, t) {
+  const videoUrl = `https://www.youtube.com/watch?v=${video.youtube_id}`;
+  const thumbUrl = video.thumbnail_url || (video.youtube_id ? `https://img.youtube.com/vi/${video.youtube_id}/hqdefault.jpg` : "");
+  const typeLabel = ({ podcast: "Podcast", event: "Event", panel: "Panel", short: "Short", video: "Video" }[video.video_type] || "Video").toUpperCase();
+
+  return `
+    <!-- Video ${i + 1} -->
+    <tr>
+      <td style="padding: 0 0 20px 0;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: ${t.cardBg}; border: 1px solid ${t.border}; border-radius: 12px; overflow: hidden;">
+          ${thumbUrl ? `
+          <tr>
+            <td style="padding: 0; line-height: 0; position: relative;">
+              <a href="${esc(videoUrl)}" target="_blank" style="text-decoration: none;">
+                <img src="${esc(thumbUrl)}" alt="" width="600" style="width: 100%; max-width: 600px; height: auto; display: block; border: 0;" />
+              </a>
+            </td>
+          </tr>` : ""}
+          <tr>
+            <td style="padding: 20px 24px 18px 24px;">
+              <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="padding-bottom: 10px;">
+                    <span style="display: inline-block; padding: 3px 10px; border-radius: 12px; background-color: rgba(255,59,92,0.1); color: #ff3b5c; font-family: ${t.bodyFontStack}; font-size: 10px; font-weight: 700; letter-spacing: 0.8px;">▶ ${typeLabel}</span>
+                    ${video.duration ? `<span style="font-family: ${t.bodyFontStack}; font-size: 12px; color: ${t.textMuted}; margin-left: 8px;">⏱ ${esc(video.duration)}</span>` : ""}
+                  </td>
+                </tr>
+              </table>
+              <a href="${esc(videoUrl)}" target="_blank" style="text-decoration: none; color: ${t.textPrimary};">
+                <h2 style="font-family: ${t.fontStack}; font-size: 18px; font-weight: 700; line-height: 1.3; color: ${t.textPrimary}; margin: 0 0 8px 0;">${esc(video.title)}</h2>
+              </a>
+              <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="font-family: ${t.bodyFontStack}; font-size: 12px; color: ${t.textMuted};">
+                    ${esc(video.channel_title || "")}${video.view_count ? ` &middot; ${fmtViews(video.view_count)} views` : ""}
+                  </td>
+                  <td align="right">
+                    <a href="${esc(videoUrl)}" target="_blank" style="font-family: ${t.bodyFontStack}; font-size: 12px; font-weight: 600; color: ${t.accent}; text-decoration: none;">Watch →</a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>`;
+}
+
+/**
+ * Generate a podcast episode card row for the newsletter.
+ */
+function generateEpisodeRow(episode, i, t) {
+  const epUrl = episode.link || "#";
+  const showName = episode.sources?.name || episode.source_name || "Podcast";
+
+  return `
+    <!-- Episode ${i + 1} -->
+    <tr>
+      <td style="padding: 0 0 20px 0;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: ${t.cardBg}; border: 1px solid ${t.border}; border-radius: 12px; overflow: hidden;">
+          <tr>
+            <td style="padding: 20px 24px 18px 24px;">
+              <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="padding-bottom: 10px;">
+                    <span style="display: inline-block; padding: 3px 10px; border-radius: 12px; background-color: rgba(0,229,160,0.1); color: #00e5a0; font-family: ${t.bodyFontStack}; font-size: 10px; font-weight: 700; letter-spacing: 0.8px;">🎧 PODCAST</span>
+                    ${episode.duration ? `<span style="font-family: ${t.bodyFontStack}; font-size: 12px; color: ${t.textMuted}; margin-left: 8px;">⏱ ${esc(episode.duration)}</span>` : ""}
+                  </td>
+                </tr>
+              </table>
+              <a href="${esc(epUrl)}" target="_blank" style="text-decoration: none; color: ${t.textPrimary};">
+                <h2 style="font-family: ${t.fontStack}; font-size: 18px; font-weight: 700; line-height: 1.3; color: ${t.textPrimary}; margin: 0 0 8px 0;">${esc(episode.title)}</h2>
+              </a>
+              ${episode.guest_name ? `<p style="font-family: ${t.bodyFontStack}; font-size: 13px; color: ${t.textSecondary}; margin: 0 0 6px 0;">Guest: ${esc(episode.guest_name)}${episode.guest_org ? ` — ${esc(episode.guest_org)}` : ""}</p>` : ""}
+              <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="font-family: ${t.bodyFontStack}; font-size: 12px; color: ${t.textMuted};">
+                    ${esc(showName)}
+                  </td>
+                  <td align="right">
+                    <a href="${esc(epUrl)}" target="_blank" style="font-family: ${t.bodyFontStack}; font-size: 12px; font-weight: 600; color: ${t.accent}; text-decoration: none;">Listen →</a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>`;
+}
+
+/**
+ * Generate the full newsletter HTML.
+ *
+ * @param {Object} options
+ * @param {Array} options.articles - Selected articles
+ * @param {Array} [options.videos] - Selected YouTube videos
+ * @param {Array} [options.episodes] - Selected podcast episodes
+ * @param {Object} options.theme - Theme object from NEWSLETTER_THEMES
+ * @param {string} [options.introText] - Optional personal intro paragraph
+ * @param {string} [options.senderName] - Name of the person sending
+ * @param {string} [options.newsletterTitle] - Custom title
+ * @param {string} [options.dateStr] - Date string for the header
+ * @returns {string} Complete HTML document string
+ */
+export function generateNewsletterHtml({
+  articles,
+  videos = [],
+  episodes = [],
+  theme,
+  introText = "",
+  senderName = "",
+  newsletterTitle = "Talent Intelligence Briefing",
+  dateStr = "",
+}) {
+  const t = theme;
+  const today = dateStr || new Date().toLocaleDateString("en-GB", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+
+  const isDark = isColorDark(t.bg);
+  const accentText = isColorDark(t.accent) ? "#ffffff" : "#000000";
+
+  const totalItems = articles.length + videos.length + episodes.length;
+
+  // Build article rows
+  const articleRows = articles.map((article, i) => generateArticleRow(article, i, t)).join("\n");
+
+  // Build video rows
+  const videoRows = videos.map((video, i) => generateVideoRow(video, i, t)).join("\n");
+
+  // Build episode rows
+  const episodeRows = episodes.map((episode, i) => generateEpisodeRow(episode, i, t)).join("\n");
+
+  // Section headers (only show if there are items AND multiple content types)
+  const hasMultipleTypes = [articles.length > 0, videos.length > 0, episodes.length > 0].filter(Boolean).length > 1;
+
+  const articleSectionHeader = hasMultipleTypes && articles.length > 0 ? `
+    <tr>
+      <td style="padding: 0 0 16px 0;">
+        <h3 style="font-family: ${t.fontStack}; font-size: 14px; font-weight: 700; color: ${t.textMuted}; margin: 0; text-transform: uppercase; letter-spacing: 1.5px; border-bottom: 1px solid ${t.border}; padding-bottom: 8px;">📰 Articles</h3>
+      </td>
+    </tr>` : "";
+
+  const videoSectionHeader = hasMultipleTypes && videos.length > 0 ? `
+    <tr>
+      <td style="padding: 12px 0 16px 0;">
+        <h3 style="font-family: ${t.fontStack}; font-size: 14px; font-weight: 700; color: ${t.textMuted}; margin: 0; text-transform: uppercase; letter-spacing: 1.5px; border-bottom: 1px solid ${t.border}; padding-bottom: 8px;">▶ Videos</h3>
+      </td>
+    </tr>` : "";
+
+  const episodeSectionHeader = hasMultipleTypes && episodes.length > 0 ? `
+    <tr>
+      <td style="padding: 12px 0 16px 0;">
+        <h3 style="font-family: ${t.fontStack}; font-size: 14px; font-weight: 700; color: ${t.textMuted}; margin: 0; text-transform: uppercase; letter-spacing: 1.5px; border-bottom: 1px solid ${t.border}; padding-bottom: 8px;">🎧 Podcasts</h3>
+      </td>
+    </tr>` : "";
 
   // Intro section
   const introSection = introText.trim()
@@ -257,7 +384,12 @@ export function generateNewsletterHtml({
     </tr>`
     : "";
 
-  const totalItems = articles.length + mediaItems.length;
+  // Content summary for preheader
+  const contentParts = [];
+  if (articles.length > 0) contentParts.push(`${articles.length} article${articles.length !== 1 ? "s" : ""}`);
+  if (videos.length > 0) contentParts.push(`${videos.length} video${videos.length !== 1 ? "s" : ""}`);
+  if (episodes.length > 0) contentParts.push(`${episodes.length} episode${episodes.length !== 1 ? "s" : ""}`);
+  const contentSummary = contentParts.join(", ");
 
   // Full HTML document
   return `<!DOCTYPE html>
@@ -278,6 +410,7 @@ export function generateNewsletterHtml({
   </noscript>
   <![endif]-->
   <style>
+    /* Reset for email clients that DO support style blocks */
     body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
     table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
     img { -ms-interpolation-mode: bicubic; border: 0; height: auto; line-height: 100%; outline: none; text-decoration: none; }
@@ -294,7 +427,7 @@ export function generateNewsletterHtml({
 <body style="margin: 0; padding: 0; background-color: ${t.bg}; font-family: ${t.bodyFontStack};">
   <!-- Preheader text (hidden, shows in email previews) -->
   <div style="display: none; max-height: 0; overflow: hidden; font-size: 1px; line-height: 1px; color: ${t.bg};">
-    ${esc(newsletterTitle)} — ${totalItems} curated item${totalItems !== 1 ? "s" : ""} for ${today}
+    ${esc(newsletterTitle)} — ${contentSummary} for ${today}
   </div>
 
   <!-- Full-width wrapper -->
@@ -312,7 +445,7 @@ export function generateNewsletterHtml({
                 <tr>
                   <td>
                     <h1 style="font-family: ${t.fontStack}; font-size: 28px; font-weight: 700; color: #ffffff; margin: 0 0 4px 0; letter-spacing: -0.5px;">${esc(newsletterTitle)}</h1>
-                    <p style="font-family: ${t.bodyFontStack}; font-size: 13px; color: rgba(255,255,255,0.5); margin: 0; letter-spacing: 0.5px;">${today} &middot; ${totalItems} item${totalItems !== 1 ? "s" : ""}</p>
+                    <p style="font-family: ${t.bodyFontStack}; font-size: 13px; color: rgba(255,255,255,0.5); margin: 0; letter-spacing: 0.5px;">${today} &middot; ${contentSummary}</p>
                   </td>
                   <td align="right" valign="top" style="padding-top: 4px;">
                     <span style="display: inline-block; padding: 4px 12px; border-radius: 8px; background-color: ${t.accent}; color: ${accentText}; font-family: ${t.bodyFontStack}; font-size: 11px; font-weight: 700; letter-spacing: 1px;">PULSE</span>
@@ -327,8 +460,12 @@ export function generateNewsletterHtml({
             <td class="content-padding" style="background-color: ${t.bg}; padding: 28px 24px 12px 24px;">
               <table width="100%" cellpadding="0" cellspacing="0" border="0">
                 ${introSection}
+                ${articleSectionHeader}
                 ${articleRows}
-                ${mediaRows}
+                ${videoSectionHeader}
+                ${videoRows}
+                ${episodeSectionHeader}
+                ${episodeRows}
                 ${signOff}
               </table>
             </td>
@@ -359,90 +496,6 @@ export function generateNewsletterHtml({
 </html>`;
 }
 
-// ─── Media Section Builder ───
-
-function buildMediaSection(mediaItems, t) {
-  const videos = mediaItems.filter((m) => m._mediaType === "video");
-  const episodes = mediaItems.filter((m) => m._mediaType === "episode");
-
-  let html = "";
-
-  if (videos.length > 0) {
-    html += `
-    <!-- ═══ WATCH ═══ -->
-    <tr>
-      <td style="padding: 20px 0 16px 0;">
-        <table width="100%" cellpadding="0" cellspacing="0" border="0">
-          <tr>
-            <td style="font-family: ${t.bodyFontStack}; font-size: 11px; font-weight: 700; color: ${t.textMuted}; letter-spacing: 1.5px; text-transform: uppercase; padding-bottom: 12px; border-bottom: 1px solid ${t.border};">▶ WATCH</td>
-          </tr>
-        </table>
-      </td>
-    </tr>`;
-
-    for (const v of videos) {
-      const thumbUrl = v.thumbnail_url || (v.youtube_id ? `https://img.youtube.com/vi/${v.youtube_id}/hqdefault.jpg` : "");
-      const videoUrl = v.youtube_id ? `https://www.youtube.com/watch?v=${v.youtube_id}` : "#";
-      html += `
-    <tr>
-      <td style="padding: 0 0 16px 0;">
-        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: ${t.cardBg}; border: 1px solid ${t.border}; border-radius: 12px; overflow: hidden;">
-          ${thumbUrl ? `<tr><td style="padding: 0; line-height: 0;"><a href="${esc(videoUrl)}" target="_blank" style="text-decoration: none;"><img src="${esc(thumbUrl)}" alt="" width="600" style="width: 100%; max-width: 600px; height: auto; display: block; border: 0;" /></a></td></tr>` : ""}
-          <tr>
-            <td style="padding: 18px 20px;">
-              <span style="display: inline-block; padding: 2px 8px; border-radius: 8px; background-color: ${t.accent}18; color: ${t.accent}; font-family: ${t.bodyFontStack}; font-size: 9px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;">VIDEO</span>
-              <span style="font-family: ${t.bodyFontStack}; font-size: 11px; color: ${t.textMuted}; margin-left: 8px;">${esc(v.channel_title || v.sources?.name || "")} &middot; ${esc(v.duration || "")}</span>
-              <a href="${esc(videoUrl)}" target="_blank" style="text-decoration: none; color: ${t.textPrimary};">
-                <h3 style="font-family: ${t.fontStack}; font-size: 18px; font-weight: 700; line-height: 1.3; color: ${t.textPrimary}; margin: 10px 0 8px 0;">${esc(v.title)}</h3>
-              </a>
-              <a href="${esc(videoUrl)}" target="_blank" style="font-family: ${t.bodyFontStack}; font-size: 12px; font-weight: 600; color: ${t.accent}; text-decoration: none;">Watch on YouTube →</a>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>`;
-    }
-  }
-
-  if (episodes.length > 0) {
-    html += `
-    <!-- ═══ LISTEN ═══ -->
-    <tr>
-      <td style="padding: 20px 0 16px 0;">
-        <table width="100%" cellpadding="0" cellspacing="0" border="0">
-          <tr>
-            <td style="font-family: ${t.bodyFontStack}; font-size: 11px; font-weight: 700; color: ${t.textMuted}; letter-spacing: 1.5px; text-transform: uppercase; padding-bottom: 12px; border-bottom: 1px solid ${t.border};">🎧 LISTEN</td>
-          </tr>
-        </table>
-      </td>
-    </tr>`;
-
-    for (const ep of episodes) {
-      const epUrl = ep.link || "#";
-      html += `
-    <tr>
-      <td style="padding: 0 0 16px 0;">
-        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: ${t.cardBg}; border: 1px solid ${t.border}; border-radius: 12px; overflow: hidden;">
-          <tr>
-            <td style="padding: 18px 20px;">
-              <span style="display: inline-block; padding: 2px 8px; border-radius: 8px; background-color: ${t.accent}18; color: ${t.accent}; font-family: ${t.bodyFontStack}; font-size: 9px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;">PODCAST</span>
-              <span style="font-family: ${t.bodyFontStack}; font-size: 11px; color: ${t.textMuted}; margin-left: 8px;">${esc(ep.sources?.name || "")} &middot; ${esc(ep.duration || "")}</span>
-              <a href="${esc(epUrl)}" target="_blank" style="text-decoration: none; color: ${t.textPrimary};">
-                <h3 style="font-family: ${t.fontStack}; font-size: 18px; font-weight: 700; line-height: 1.3; color: ${t.textPrimary}; margin: 10px 0 6px 0;">${esc(ep.title)}</h3>
-              </a>
-              ${ep.guest_name ? `<p style="font-family: ${t.bodyFontStack}; font-size: 13px; color: ${t.textSecondary}; margin: 0 0 8px 0;">${esc(ep.guest_name)}${ep.guest_org ? ` · ${esc(ep.guest_org)}` : ""}</p>` : ""}
-              <a href="${esc(epUrl)}" target="_blank" style="font-family: ${t.bodyFontStack}; font-size: 12px; font-weight: 600; color: ${t.accent}; text-decoration: none;">Listen to episode →</a>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>`;
-    }
-  }
-
-  return html;
-}
-
 // ─── Helpers ───
 
 function getSourceAbbr(name) {
@@ -458,5 +511,13 @@ function isColorDark(hex) {
   const r = parseInt(c.substring(0, 2), 16);
   const g = parseInt(c.substring(2, 4), 16);
   const b = parseInt(c.substring(4, 6), 16);
+  // Relative luminance formula
   return (r * 0.299 + g * 0.587 + b * 0.114) < 128;
+}
+
+function fmtViews(n) {
+  if (!n) return "0";
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
+  return `${n}`;
 }
