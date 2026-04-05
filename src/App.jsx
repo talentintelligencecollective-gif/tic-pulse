@@ -1,12 +1,12 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { supabase, fetchArticles, incrementEngagement } from "./supabase.js";
+import { useState, useEffect, useCallback, useRef, useMemo, Component } from "react";
+import { supabase, fetchArticles, incrementEngagement, trackInteraction, fetchUserAffinities } from "./supabase.js";
 import AuthPage from "./AuthPage.jsx";
 import ArticleCard from "./ArticleCard.jsx";
 import ShareSheet from "./ShareSheet.jsx";
 import NewsletterBuilder from "./NewsletterBuilder.jsx";
 import Toast from "./Toast.jsx";
 import {
-  SearchIcon, CloseIcon, TrendingIcon, BookmarkIcon,
+  SearchIcon, CloseIcon, BookmarkIcon,
   FeedIcon, DiscoverIcon, PeopleIcon, NewsletterIcon,
 } from "./Icons.jsx";
 
@@ -63,6 +63,32 @@ const fmtViews = (n) => !n ? "0" : n >= 1e6 ? `${(n/1e6).toFixed(1)}M` : n >= 1e
 const videoTypeColor = (t) => t === "podcast" ? "#00e5a0" : t === "event" ? "#f59e0b" : t === "panel" ? "#a855f7" : t === "short" ? "#00b4d8" : "#888";
 const videoTypeLabel = (t) => ({ podcast: "Podcast", event: "Event", panel: "Panel", short: "Short", video: "Video" }[t] || "Video");
 
+// ─── Error Boundary — prevents white-screen crashes ───
+
+class ErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { hasError: false }; }
+  static getDerivedStateFromError() { return { hasError: true }; }
+  componentDidCatch(error, info) { console.error("TIC Pulse crash:", error, info); }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ minHeight: "100vh", background: "#000", display: "flex", alignItems: "center", justifyContent: "center", padding: "24px" }}>
+          <div style={{ textAlign: "center", maxWidth: "320px" }}>
+            <div style={{ fontSize: "40px", marginBottom: "16px", opacity: 0.5 }}>⚡</div>
+            <h2 style={{ fontSize: "18px", fontWeight: 700, color: "#fff", margin: "0 0 8px", fontFamily: "Georgia, serif" }}>Something went wrong</h2>
+            <p style={{ fontSize: "13px", color: "#888", lineHeight: 1.5, margin: "0 0 20px" }}>TIC Pulse hit an unexpected error. Try refreshing.</p>
+            <button onClick={() => { this.setState({ hasError: false }); window.location.reload(); }} style={{
+              background: "#00e5a0", border: "none", borderRadius: "12px", color: "#000",
+              padding: "10px 24px", fontSize: "14px", fontWeight: 700, cursor: "pointer",
+            }}>Refresh</button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 // ═══════════════════════════════════════════════
 //  APP (auth wrapper)
 // ═══════════════════════════════════════════════
@@ -90,7 +116,7 @@ export default function App() {
   }
 
   if (!session) return <AuthPage onAuth={(s) => setSession(s)} />;
-  return <PulseApp session={session} />;
+  return <ErrorBoundary><PulseApp session={session} /></ErrorBoundary>;
 }
 
 // ═══════════════════════════════════════════════
@@ -126,13 +152,27 @@ function PulseApp({ session }) {
   const [bookmarkedIds, setBookmarkedIds] = useState(new Set());
   const [engagementLoaded, setEngagementLoaded] = useState(false);
 
-  // Dynamic trending tags
-  const [trendingTags, setTrendingTags] = useState([]);
+  // Personalisation
+  const [sortMode, setSortMode] = useState("latest");
+  const [affinities, setAffinities] = useState({});
+
+  // Search debounce
+  const [debouncedSearch, setDebouncedSearch] = useState("");
 
   const likedIdsRef = useRef(likedIds);
   useEffect(() => { likedIdsRef.current = likedIds; }, [likedIds]);
 
+  // Ref to avoid stale closures in handlers
+  const articlesRef = useRef(articles);
+  useEffect(() => { articlesRef.current = articles; }, [articles]);
+
   const searchInputRef = useRef(null);
+
+  // Debounce search input by 250ms
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(searchQuery), 250);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   // ─── Load engagement from Supabase ───
   useEffect(() => {
@@ -162,6 +202,12 @@ function PulseApp({ session }) {
     loadEngagement();
   }, [userId]);
 
+  // ─── Load personalisation affinities ───
+  useEffect(() => {
+    if (!userId) return;
+    fetchUserAffinities(userId).then(setAffinities);
+  }, [userId]);
+
   // ─── Data Loading ───
   const loadArticles = useCallback(async () => {
     setLoading(true);
@@ -179,58 +225,40 @@ function PulseApp({ session }) {
 
   useEffect(() => { loadArticles(); }, [loadArticles]);
 
-  // ─── Dynamic trending tags (from last 48h of articles) ───
-  useEffect(() => {
-    if (articles.length === 0) return;
-    const cutoff = Date.now() - 48 * 60 * 60 * 1000;
-    const tagCounts = {};
-
-    for (const a of articles) {
-      const pubDate = new Date(a.published_at || a.created_at).getTime();
-      if (pubDate < cutoff) continue;
-      for (const tag of (a.tags || [])) {
-        const clean = tag.replace(/^#/, "");
-        if (clean.length > 2) {
-          tagCounts[clean] = (tagCounts[clean] || 0) + 1;
-        }
-      }
-    }
-
-    const sorted = Object.entries(tagCounts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 6)
-      .map(([tag, count]) => ({ tag: `#${tag}`, count: String(count) }));
-
-    // Fallback if no tags found in recent articles
-    if (sorted.length === 0) {
-      setTrendingTags([]);
-    } else {
-      setTrendingTags(sorted);
-    }
-  }, [articles]);
-
-  // ─── Client-side filtering (7-day freshness) ───
+  // ─── Client-side filtering (7-day freshness) + personalisation ───
   const filteredArticles = useMemo(() => {
     const freshnessCutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
-    return articles
-      .filter((a) => {
-        const pubDate = new Date(a.published_at || a.created_at).getTime();
-        if (pubDate < freshnessCutoff) return false;
-        const matchesCategory = activeCategory === "All" || a.category === activeCategory;
-        if (!matchesCategory) return false;
-        if (searchQuery) {
-          const q = searchQuery.toLowerCase();
-          return (
-            (a.title || "").toLowerCase().includes(q) ||
-            (a.tldr || "").toLowerCase().includes(q) ||
-            (a.tags || []).some((t) => t.toLowerCase().includes(q)) ||
-            (a.category || "").toLowerCase().includes(q)
-          );
-        }
-        return true;
-      })
-      .sort((a, b) => new Date(b.published_at || b.created_at) - new Date(a.published_at || a.created_at));
-  }, [articles, activeCategory, searchQuery]);
+    const filtered = articles.filter((a) => {
+      const pubDate = new Date(a.published_at || a.created_at).getTime();
+      if (pubDate < freshnessCutoff) return false;
+      const matchesCategory = activeCategory === "All" || a.category === activeCategory;
+      if (!matchesCategory) return false;
+      if (debouncedSearch) {
+        const q = debouncedSearch.toLowerCase();
+        return (
+          (a.title || "").toLowerCase().includes(q) ||
+          (a.tldr || "").toLowerCase().includes(q) ||
+          (a.tags || []).some((t) => t.toLowerCase().includes(q)) ||
+          (a.category || "").toLowerCase().includes(q)
+        );
+      }
+      return true;
+    });
+
+    // Sort: "latest" = chronological, "foryou" = affinity-boosted
+    if (sortMode === "foryou" && Object.keys(affinities).length > 0) {
+      const maxAff = Math.max(...Object.values(affinities).map((a) => a.total), 1);
+      return filtered.sort((a, b) => {
+        const recA = 1 - (Date.now() - new Date(a.published_at || a.created_at).getTime()) / (7 * 86400000);
+        const recB = 1 - (Date.now() - new Date(b.published_at || b.created_at).getTime()) / (7 * 86400000);
+        const affA = (affinities[a.category]?.total || 0) / maxAff;
+        const affB = (affinities[b.category]?.total || 0) / maxAff;
+        return (Math.max(0, recB) * 0.6 + affB * 0.4) - (Math.max(0, recA) * 0.6 + affA * 0.4);
+      });
+    }
+
+    return filtered.sort((a, b) => new Date(b.published_at || b.created_at) - new Date(a.published_at || a.created_at));
+  }, [articles, activeCategory, debouncedSearch, sortMode, affinities]);
 
   useEffect(() => {
     if (searchOpen && searchInputRef.current) searchInputRef.current.focus();
@@ -257,6 +285,12 @@ function PulseApp({ session }) {
       return { ...a, like_count: (a.like_count || 0) + (wasLiked ? -1 : 1) };
     }));
 
+    // Track for personalisation (only on like, not unlike)
+    if (!wasLiked) {
+      const article = articlesRef.current.find((a) => a.id === articleId);
+      if (article) trackInteraction(userId, articleId, "like", article);
+    }
+
     // Persist to Supabase
     incrementEngagement(articleId, "like_count", wasLiked ? -1 : 1);
     supabase.from("user_engagement").upsert({
@@ -279,7 +313,11 @@ function PulseApp({ session }) {
       return next;
     });
 
-    if (!wasBookmarked) showToast("Saved to bookmarks");
+    if (!wasBookmarked) {
+      showToast("Saved to bookmarks");
+      const article = articlesRef.current.find((a) => a.id === articleId);
+      if (article) trackInteraction(userId, articleId, "bookmark", article);
+    }
 
     supabase.from("user_engagement").upsert({
       user_id: userId,
@@ -380,11 +418,10 @@ function PulseApp({ session }) {
           <FeedView
             articles={filteredArticles} loading={loading} error={error} searchQuery={searchQuery}
             likedIds={likedIds} bookmarkedIds={bookmarkedIds} selectedIds={selectedIdSet}
-            trendingTags={trendingTags} user={session?.user}
+            user={session?.user} sortMode={sortMode} onSortModeChange={setSortMode}
             onLike={handleLike} onBookmark={handleBookmark} onShare={handleShare}
             onToggleSelect={handleToggleSelect}
             onClearFilters={() => { setActiveCategory("All"); setSearchQuery(""); setSearchOpen(false); }}
-            onSearchTag={(tag) => { setSearchQuery(tag); setSearchOpen(true); }}
             onRetry={loadArticles}
           />
         )}
@@ -549,11 +586,21 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
 //  FEED VIEW — now with dynamic trending + user prop
 // ═══════════════════════════════════════════════
 
-function FeedView({ articles, loading, error, searchQuery, likedIds, bookmarkedIds, selectedIds, trendingTags, user, onLike, onBookmark, onShare, onToggleSelect, onClearFilters, onSearchTag, onRetry }) {
+function FeedView({ articles, loading, error, searchQuery, likedIds, bookmarkedIds, selectedIds, user, sortMode, onSortModeChange, onLike, onBookmark, onShare, onToggleSelect, onClearFilters, onRetry }) {
   const hasSelections = selectedIds.size > 0;
   return (
     <div style={{ padding: hasSelections ? "12px 12px 180px" : "12px 12px 110px" }}>
-      <TrendingTicker tags={trendingTags} onTagClick={onSearchTag} />
+      {/* Sort toggle */}
+      <div style={{ display: "flex", gap: "6px", padding: "0 4px 12px" }}>
+        {[{ id: "latest", label: "Latest" }, { id: "foryou", label: "For You" }].map((mode) => (
+          <button key={mode.id} onClick={() => onSortModeChange(mode.id)} style={{
+            fontSize: "12px", fontWeight: 700, padding: "6px 16px", borderRadius: "10px", border: "none",
+            background: sortMode === mode.id ? "#00e5a0" : "#1a1a1e",
+            color: sortMode === mode.id ? "#000" : "#888",
+            transition: "all 0.2s",
+          }}>{mode.label}</button>
+        ))}
+      </div>
 
       {searchQuery && (
         <div style={{
@@ -1107,38 +1154,6 @@ function ListenView({ selectedEpisodeIds, onToggleSelectEpisode, onCacheEpisodes
           })}
         </div>
       )}
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════
-//  TRENDING TICKER — now dynamic
-// ═══════════════════════════════════════════════
-
-function TrendingTicker({ tags, onTagClick }) {
-  if (!tags || tags.length === 0) return null;
-  return (
-    <div style={{
-      display: "flex", alignItems: "center", gap: "10px", padding: "10px 14px",
-      marginBottom: "14px", background: "rgba(255,255,255,0.015)",
-      borderRadius: "14px", border: "1px solid #1a1a1a",
-      overflowX: "auto", scrollbarWidth: "none",
-    }}>
-      <div style={{ display: "flex", alignItems: "center", gap: "5px", color: "#00e5a0", flexShrink: 0 }}>
-        <TrendingIcon />
-        <span style={{ fontSize: "10px", fontWeight: 800, letterSpacing: "1.2px" }}>TRENDING</span>
-      </div>
-      <div style={{ width: "1px", height: "14px", background: "#333", flexShrink: 0 }} />
-      {tags.map((t) => (
-        <button key={t.tag} onClick={() => onTagClick(t.tag.slice(1))} style={{
-          background: "none", border: "none", color: "#888",
-          fontSize: "11px", fontWeight: 600, whiteSpace: "nowrap",
-          padding: "3px 6px", borderRadius: "6px", transition: "all 0.2s",
-        }}
-          onMouseEnter={(e) => { e.currentTarget.style.color = "#00e5a0"; e.currentTarget.style.background = "rgba(0,229,160,0.08)"; }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = "#888"; e.currentTarget.style.background = "none"; }}
-        >{t.tag}</button>
-      ))}
     </div>
   );
 }
