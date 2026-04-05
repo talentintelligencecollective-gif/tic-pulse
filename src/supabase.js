@@ -278,3 +278,100 @@ export async function saveBrandGuidelines({ companyName, colors }) {
     return null;
   }
 }
+
+// ═══════════════════════════════════════════════
+//  USER STREAKS & BADGES
+// ═══════════════════════════════════════════════
+
+/**
+ * Badge tier definitions.
+ * Computed from streak length.
+ */
+export const STREAK_TIERS = [
+  { min: 500, label: "Legend",         icon: "⭐", color: "#ffd700" },
+  { min: 300, label: "Champion",       icon: "🏆", color: "#f59e0b" },
+  { min: 100, label: "Centurion",      icon: "👑", color: "#a855f7" },
+  { min:  50, label: "Dedicated",      icon: "💎", color: "#00b4d8" },
+  { min:  10, label: "On Fire",        icon: "⚡", color: "#ff6b35" },
+  { min:   3, label: "Warming Up",     icon: "🔥", color: "#00e5a0" },
+  { min:   0, label: "New Member",     icon: "🌱", color: "#888888" },
+];
+
+export const ENGAGEMENT_BADGES = [
+  { field: "total_comments",    min: 10, label: "Commenter",      icon: "💬" },
+  { field: "total_likes",       min: 50, label: "Supporter",      icon: "❤️" },
+  { field: "total_newsletters", min: 5,  label: "Curator",        icon: "📰" },
+  { field: "total_shares",      min: 20, label: "Amplifier",      icon: "📡" },
+  { field: "total_bookmarks",   min: 30, label: "Collector",      icon: "📚" },
+];
+
+/**
+ * Get the streak tier for a given streak count.
+ */
+export function getStreakTier(streakCount) {
+  for (const tier of STREAK_TIERS) {
+    if (streakCount >= tier.min) return tier;
+  }
+  return STREAK_TIERS[STREAK_TIERS.length - 1];
+}
+
+/**
+ * Get earned engagement badges from streak data.
+ */
+export function getEarnedBadges(streakData) {
+  if (!streakData) return [];
+  return ENGAGEMENT_BADGES.filter((b) => (streakData[b.field] || 0) >= b.min);
+}
+
+/**
+ * Update the user's streak on app open.
+ * Returns the full streak data including counters.
+ */
+export async function updateStreak(userId) {
+  if (!userId) return null;
+  try {
+    const { data, error } = await supabase.rpc("update_user_streak", {
+      p_user_id: userId,
+    });
+    if (error) {
+      console.error("updateStreak error:", error.message);
+      return null;
+    }
+    return data?.[0] || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Increment a streak engagement counter.
+ * Call alongside existing engagement logic.
+ */
+export async function incrementStreakCounter(userId, field, delta = 1) {
+  if (!userId) return;
+  try {
+    await supabase.rpc("increment_streak_counter", {
+      p_user_id: userId,
+      p_field: field,
+      p_delta: delta,
+    });
+  } catch {}
+}
+
+/**
+ * Fetch another user's streak data (for comment badges).
+ */
+export async function fetchUserStreak(userId) {
+  if (!userId) return null;
+  try {
+    const { data, error } = await supabase
+      .from("user_streaks")
+      .select("current_streak, longest_streak, total_active_days, total_likes, total_comments, total_shares, total_bookmarks, total_newsletters")
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (error || !data) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
