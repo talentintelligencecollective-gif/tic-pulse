@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./supabase.js";
+import { getStreakTier, fetchUserStreak, incrementStreakCounter } from "./supabase.js";
 import { HeartIcon, CommentIcon, ShareIcon, BookmarkIcon, ExternalIcon, ToneIndicator } from "./Icons.jsx";
 
 const CAT_COLORS = {
@@ -42,6 +43,7 @@ export default function ArticleCard({ article, index, user, onLike, onBookmark, 
   // Use comment_count from articles_feed view — no per-card query needed
   const [commentCount, setCommentCount] = useState(article.comment_count || 0);
   const [submitting, setSubmitting] = useState(false);
+  const [commenterStreaks, setCommenterStreaks] = useState({});
 
   const color = CAT_COLORS[article.category] || "#00e5a0";
   const abbr = sourceAbbr(article.source_name);
@@ -62,6 +64,18 @@ export default function ArticleCard({ article, index, user, onLike, onBookmark, 
           .order("created_at", { ascending: true });
         setComments(data || []);
         setCommentCount(data?.length || 0);
+
+        // Fetch streak data for unique commenters
+        if (data && data.length > 0) {
+          const uniqueUserIds = [...new Set(data.map((c) => c.user_id))];
+          const streaks = {};
+          // Batch fetch — max 10 to avoid spam
+          for (const uid of uniqueUserIds.slice(0, 10)) {
+            const s = await fetchUserStreak(uid);
+            if (s) streaks[uid] = s;
+          }
+          setCommenterStreaks(streaks);
+        }
       } catch (e) {
         console.error("Failed to load comments:", e);
       }
@@ -86,6 +100,8 @@ export default function ArticleCard({ article, index, user, onLike, onBookmark, 
       setComments((prev) => [...prev, data]);
       setCommentCount((c) => c + 1);
       setCommentText("");
+      // Increment comment counter for streak badges
+      incrementStreakCounter(user.id, "total_comments", 1);
     } catch (e) {
       console.error("Failed to post comment:", e);
     }
@@ -268,6 +284,8 @@ export default function ArticleCard({ article, index, user, onLike, onBookmark, 
           {comments.map((comment) => {
             const isOwn = user && comment.user_id === user.id;
             const initials = (comment.user_name || "?").charAt(0).toUpperCase();
+            const cStreak = commenterStreaks[comment.user_id];
+            const cTier = cStreak ? getStreakTier(cStreak.current_streak) : null;
             return (
               <div key={comment.id} style={{
                 display: "flex", gap: "10px", marginBottom: "12px",
@@ -280,10 +298,21 @@ export default function ArticleCard({ article, index, user, onLike, onBookmark, 
                   fontSize: "10px", fontWeight: 700, color: isOwn ? "#000" : "#888",
                 }}>{initials}</div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "3px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "3px", flexWrap: "wrap" }}>
                     <span style={{ fontSize: "12px", fontWeight: 600, color: "#ccc" }}>
                       {comment.user_name || "Anonymous"}
                     </span>
+                    {/* Streak badge */}
+                    {cTier && cStreak.current_streak >= 3 && (
+                      <span title={`${cTier.label} · ${cStreak.current_streak}-day streak`} style={{
+                        display: "inline-flex", alignItems: "center", gap: "2px",
+                        fontSize: "9px", fontWeight: 700, color: cTier.color,
+                        padding: "1px 6px", borderRadius: "8px",
+                        background: `${cTier.color}15`, border: `1px solid ${cTier.color}25`,
+                      }}>
+                        {cTier.icon} {cStreak.current_streak}
+                      </span>
+                    )}
                     <span style={{ fontSize: "10px", color: "#555" }}>
                       {formatRelativeTime(comment.created_at)}
                     </span>
