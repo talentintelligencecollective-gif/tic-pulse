@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { generateNewsletterHtml, NEWSLETTER_THEMES } from "./emailTemplate.js";
-import { lookupBrandGuidelines, saveBrandGuidelines, loadNewsletterPrefs, saveNewsletterPrefs } from "./supabase.js";
+import { lookupBrandGuidelines, saveBrandGuidelines, loadNewsletterPrefs, saveNewsletterPrefs, fetchUserProfile } from "./supabase.js";
 
 // ─── Theme Swatch ───
 
@@ -69,20 +69,76 @@ export default function NewsletterBuilder({ articles = [], videos = [], episodes
 
   const previewRef = useRef(null);
 
-  // ─── Load saved preferences on mount ───
+  const DEFAULT_INTRO = "Good morning — here are this week's key talent intelligence stories worth your attention.";
+
+  // ─── Auto-run brand lookup (used on mount and on manual change) ───
+  const runBrandLookup = useCallback(async (name) => {
+    if (!name || name.trim().length < 2) {
+      setBrandLookupState("idle");
+      setBrandData(null);
+      return;
+    }
+    setBrandLookupState("searching");
+    const result = await lookupBrandGuidelines(name);
+    if (result) {
+      setBrandLookupState("found");
+      setBrandData(result);
+      setCustomColors((prev) => ({
+        ...prev,
+        accent: result.color_primary || prev.accent,
+        headerBg: result.color_header_bg || prev.headerBg,
+        bg: result.color_body_bg || prev.bg,
+        cardBg: result.color_card_bg || prev.cardBg,
+        textPrimary: result.color_text_primary || prev.textPrimary,
+        textSecondary: result.color_text_secondary || prev.textSecondary,
+      }));
+      setActiveThemeId("custom");
+    } else {
+      setBrandLookupState("notfound");
+      setBrandData(null);
+    }
+  }, []);
+
+  // ─── Load profile + saved prefs on mount ───
   useEffect(() => {
     if (!userId) { setPrefsLoaded(true); return; }
-    loadNewsletterPrefs(userId).then((prefs) => {
-      if (prefs) {
-        if (prefs.senderName) setSenderName(prefs.senderName);
-        if (prefs.companyName) setCompanyName(prefs.companyName);
-        if (prefs.themeId) setActiveThemeId(prefs.themeId);
-        if (prefs.customColors) setCustomColors(prefs.customColors);
-        if (prefs.title) setTitle(prefs.title);
-      }
+
+    async function init() {
+      // Load saved prefs and user profile in parallel
+      const [prefs, profile] = await Promise.all([
+        loadNewsletterPrefs(userId),
+        fetchUserProfile(userId),
+      ]);
+
+      // Start with profile defaults, then override with saved prefs
+      const profileName = profile?.full_name || "";
+      const profileCompany = profile?.company || "";
+
+      // Sender name: saved pref > profile name
+      setSenderName(prefs?.senderName || profileName);
+
+      // Company: saved pref > profile company
+      const resolvedCompany = prefs?.companyName || profileCompany;
+      setCompanyName(resolvedCompany);
+
+      // Intro: saved pref > default
+      setIntroText(prefs?.introText || DEFAULT_INTRO);
+
+      // Theme/colors: saved pref > defaults
+      if (prefs?.themeId) setActiveThemeId(prefs.themeId);
+      if (prefs?.customColors) setCustomColors(prefs.customColors);
+      if (prefs?.title) setTitle(prefs.title);
+
       setPrefsLoaded(true);
-    });
-  }, [userId]);
+
+      // Auto-trigger brand lookup if we have a company name and no saved custom colors
+      if (resolvedCompany && !prefs?.customColors) {
+        runBrandLookup(resolvedCompany);
+      }
+    }
+
+    init();
+  }, [userId, runBrandLookup]);
 
   // ─── Save preferences when they change (debounced) ───
   const saveTimerRef = useRef(null);
@@ -93,15 +149,16 @@ export default function NewsletterBuilder({ articles = [], videos = [], episodes
       saveNewsletterPrefs(userId, {
         senderName,
         companyName,
+        introText,
         themeId: activeThemeId,
         customColors,
         title,
       });
     }, 1500);
     return () => clearTimeout(saveTimerRef.current);
-  }, [userId, senderName, companyName, activeThemeId, customColors, title, prefsLoaded]);
+  }, [userId, senderName, companyName, introText, activeThemeId, customColors, title, prefsLoaded]);
 
-  // ─── Brand lookup with debounce ───
+  // ─── Brand lookup with debounce (manual typing) ───
   const handleCompanyNameChange = useCallback((name) => {
     setCompanyName(name);
     clearTimeout(lookupTimerRef.current);
@@ -113,29 +170,8 @@ export default function NewsletterBuilder({ articles = [], videos = [], episodes
     }
 
     setBrandLookupState("searching");
-    lookupTimerRef.current = setTimeout(async () => {
-      const result = await lookupBrandGuidelines(name);
-      if (result) {
-        setBrandLookupState("found");
-        setBrandData(result);
-        // Auto-fill the custom colors from brand guidelines
-        setCustomColors((prev) => ({
-          ...prev,
-          accent: result.color_primary || prev.accent,
-          headerBg: result.color_header_bg || prev.headerBg,
-          bg: result.color_body_bg || prev.bg,
-          cardBg: result.color_card_bg || prev.cardBg,
-          textPrimary: result.color_text_primary || prev.textPrimary,
-          textSecondary: result.color_text_secondary || prev.textSecondary,
-        }));
-        // Auto-switch to custom theme
-        setActiveThemeId("custom");
-      } else {
-        setBrandLookupState("notfound");
-        setBrandData(null);
-      }
-    }, 600);
-  }, []);
+    lookupTimerRef.current = setTimeout(() => runBrandLookup(name), 600);
+  }, [runBrandLookup]);
 
   // ─── Save custom brand colours back to Supabase ───
   const handleSaveBrandColors = useCallback(async () => {
@@ -221,6 +257,7 @@ export default function NewsletterBuilder({ articles = [], videos = [], episodes
     width: "100%", padding: "12px 14px", borderRadius: "12px",
     border: "1px solid #333", background: "#111", color: "#eee",
     fontSize: "14px", outline: "none", fontFamily: "'DM Sans', sans-serif",
+    boxSizing: "border-box",
   };
 
   return (
@@ -231,6 +268,7 @@ export default function NewsletterBuilder({ articles = [], videos = [], episodes
       <style>{`
         @keyframes nbFade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
         .nb-anim { animation: nbFade 0.2s ease; }
+        .nb-input { box-sizing: border-box; }
         .nb-input::placeholder { color: #555; }
         .nb-input:focus { border-color: #00e5a0 !important; }
         @keyframes nbPulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
@@ -302,13 +340,13 @@ export default function NewsletterBuilder({ articles = [], videos = [], episodes
                   <label style={{ display: "block", fontSize: "11px", fontWeight: 700, color: "#888", letterSpacing: "0.8px", marginBottom: "6px" }}>
                     COMPANY NAME
                   </label>
-                  <div style={{ position: "relative" }}>
+                  <div style={{ position: "relative", overflow: "hidden" }}>
                     <input
                       className="nb-input"
                       value={companyName}
                       onChange={(e) => handleCompanyNameChange(e.target.value)}
                       placeholder="Type to auto-detect brand colours…"
-                      style={{ ...inputStyle, paddingRight: "40px" }}
+                      style={{ ...inputStyle, paddingRight: "36px" }}
                     />
                     {/* Status indicator */}
                     <div style={{ position: "absolute", right: "14px", top: "50%", transform: "translateY(-50%)" }}>
@@ -396,7 +434,7 @@ export default function NewsletterBuilder({ articles = [], videos = [], episodes
                 Optional opening paragraph for your audience
               </p>
               <textarea className="nb-input" value={introText} onChange={(e) => setIntroText(e.target.value)}
-                placeholder="Good morning team — here are this week's key talent intelligence stories..."
+                placeholder="Add a personal introduction for your audience…"
                 rows={4} style={{ ...inputStyle, resize: "vertical", lineHeight: 1.6 }} />
             </div>
             <div style={{ marginBottom: "18px" }}>
