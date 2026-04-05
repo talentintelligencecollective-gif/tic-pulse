@@ -37,8 +37,11 @@ export async function fetchArticles({ category, search, limit = 30, offset = 0 }
   }
 
   if (search) {
-    // Search across title and tldr
-    query = query.or(`title.ilike.%${search}%,tldr.ilike.%${search}%`);
+    // Sanitise: escape PostgREST special chars to prevent filter injection
+    const safe = search.replace(/[%_\\()"',.*]/g, "");
+    if (safe.length > 0) {
+      query = query.or(`title.ilike.%${safe}%,tldr.ilike.%${safe}%`);
+    }
   }
 
   const { data, error } = await query;
@@ -85,6 +88,57 @@ export async function fetchCategoryCounts() {
     counts[row.category] = (counts[row.category] || 0) + 1;
   }
   return counts;
+}
+
+// ═══════════════════════════════════════════════
+//  INTERACTION TRACKING — for personalisation
+// ═══════════════════════════════════════════════
+
+/**
+ * Log a user interaction for personalisation.
+ * Called on like, bookmark, share, and article click.
+ */
+export async function trackInteraction(userId, articleId, type, article = {}) {
+  if (!userId || !articleId) return;
+  try {
+    const { error } = await supabase.from("user_interactions").insert({
+      user_id: userId,
+      article_id: articleId,
+      interaction_type: type,
+      category: article.category || null,
+      tags: article.tags || [],
+      region: article.region || null,
+    });
+    // Ignore duplicate key errors (23505)
+    if (error && error.code !== "23505") {
+      console.error("trackInteraction error:", error.message);
+    }
+  } catch {}
+}
+
+/**
+ * Fetch the current user's category affinities for personalisation.
+ * Returns { "Automation": { total: 12, recent: 5 }, ... }
+ */
+export async function fetchUserAffinities(userId) {
+  if (!userId) return {};
+  try {
+    const { data, error } = await supabase
+      .from("user_affinities")
+      .select("category, interaction_count, recent_count")
+      .eq("user_id", userId);
+    if (error || !data) return {};
+    const affinities = {};
+    for (const row of data) {
+      affinities[row.category] = {
+        total: row.interaction_count,
+        recent: row.recent_count,
+      };
+    }
+    return affinities;
+  } catch {
+    return {};
+  }
 }
 
 // ═══════════════════════════════════════════════
