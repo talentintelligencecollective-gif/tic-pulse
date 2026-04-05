@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo, Component } from "react";
-import { supabase, fetchArticles, incrementEngagement, trackInteraction, fetchUserAffinities, updateStreak, incrementStreakCounter, getStreakTier, getEarnedBadges } from "./supabase.js";
+import { supabase, fetchArticles, incrementEngagement, trackInteraction, fetchUserAffinities, updateStreak, incrementStreakCounter, getStreakTier, getEarnedBadges, fetchUserProfile, updateUserProfile } from "./supabase.js";
 import AuthPage from "./AuthPage.jsx";
 import ArticleCard from "./ArticleCard.jsx";
 import ShareSheet from "./ShareSheet.jsx";
@@ -142,6 +142,9 @@ function PulseApp({ session }) {
   const [selectedVideoIds, setSelectedVideoIds] = useState([]);
   const [selectedEpisodeIds, setSelectedEpisodeIds] = useState([]);
   const [showNewsletter, setShowNewsletter] = useState(false);
+
+  // Profile editor
+  const [showProfile, setShowProfile] = useState(false);
 
   // Cached multimedia data for the newsletter builder
   const [cachedVideos, setCachedVideos] = useState([]);
@@ -427,6 +430,7 @@ function PulseApp({ session }) {
         searchInputRef={searchInputRef} user={session?.user} activeTab={activeTab}
         streakData={streakData}
         onLogout={async () => { await supabase.auth.signOut(); }}
+        onEditProfile={() => setShowProfile(true)}
         onToggleSearch={() => { setSearchOpen(!searchOpen); if (searchOpen) setSearchQuery(""); }}
         onSearchChange={setSearchQuery}
         onCategoryChange={(cat) => { setActiveCategory(cat); setSearchQuery(""); setSearchOpen(false); }}
@@ -503,6 +507,15 @@ function PulseApp({ session }) {
 
       <ShareSheet article={shareTarget} onClose={() => setShareTarget(null)} onToast={showToast} />
       <Toast message={toast.msg} visible={toast.show} />
+      {showProfile && (
+        <ProfileEditor
+          userId={userId}
+          user={session?.user}
+          streakData={streakData}
+          onClose={() => setShowProfile(false)}
+          onToast={showToast}
+        />
+      )}
       {showNewsletter && (
         <NewsletterBuilder
           articles={selectedArticles}
@@ -521,7 +534,7 @@ function PulseApp({ session }) {
 //  HEADER
 // ═══════════════════════════════════════════════
 
-function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user, activeTab, streakData, onLogout, onToggleSearch, onSearchChange, onCategoryChange }) {
+function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user, activeTab, streakData, onLogout, onEditProfile, onToggleSearch, onSearchChange, onCategoryChange }) {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userInitials = user?.user_metadata?.full_name
     ? user.user_metadata.full_name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)
@@ -583,6 +596,7 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
                     </div>
                   </div>
                 )}
+                <button onClick={() => { setShowUserMenu(false); onEditProfile(); }} style={{ width: "100%", padding: "10px 12px", background: "none", border: "none", color: "#ccc", fontSize: "13px", fontWeight: 600, textAlign: "left", borderRadius: "10px", borderBottom: "1px solid #222" }}>Edit profile</button>
                 <button onClick={() => { setShowUserMenu(false); onLogout(); }} style={{ width: "100%", padding: "10px 12px", background: "none", border: "none", color: "#ff3b5c", fontSize: "13px", fontWeight: 600, textAlign: "left", borderRadius: "10px" }}>Sign out</button>
               </div>
             )}
@@ -1302,6 +1316,196 @@ function SavedView({ articles, likedIds, bookmarkedIds, user, onLike, onBookmark
             onLike={onLike} onBookmark={onBookmark} onShare={onShare} />
         ))
       )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
+//  PROFILE EDITOR
+// ═══════════════════════════════════════════════
+
+function ProfileEditor({ userId, user, streakData, onClose, onToast }) {
+  const [fullName, setFullName] = useState("");
+  const [company, setCompany] = useState("");
+  const [jobTitle, setJobTitle] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  const streakTier = streakData ? getStreakTier(streakData.current_streak) : null;
+  const earnedBadges = getEarnedBadges(streakData);
+
+  // Load current profile
+  useEffect(() => {
+    if (!userId) return;
+    fetchUserProfile(userId).then((profile) => {
+      if (profile) {
+        setFullName(profile.full_name || "");
+        setCompany(profile.company || "");
+        setJobTitle(profile.job_title || "");
+      } else {
+        // Fallback to auth metadata
+        setFullName(user?.user_metadata?.full_name || "");
+      }
+      setLoading(false);
+    });
+  }, [userId, user]);
+
+  const handleSave = async () => {
+    if (!fullName.trim()) { onToast("Name is required"); return; }
+    setSaving(true);
+    const ok = await updateUserProfile(userId, {
+      fullName: fullName.trim(),
+      company: company.trim(),
+      jobTitle: jobTitle.trim(),
+    });
+    setSaving(false);
+    if (ok) {
+      onToast("Profile updated");
+      onClose();
+    } else {
+      onToast("Failed to save — try again");
+    }
+  };
+
+  const inputStyle = {
+    width: "100%", padding: "14px 16px", borderRadius: "14px",
+    border: "1px solid #333", background: "#111", color: "#eee",
+    fontSize: "14px", outline: "none", fontFamily: "'DM Sans', sans-serif",
+    boxSizing: "border-box",
+  };
+
+  const labelStyle = {
+    display: "block", fontSize: "11px", fontWeight: 700, color: "#888",
+    letterSpacing: "0.8px", marginBottom: "6px", textTransform: "uppercase",
+  };
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 2000, background: "#000",
+      display: "flex", flexDirection: "column", maxWidth: "480px", margin: "0 auto",
+    }}>
+      <style>{`
+        .pe-input:focus { border-color: #00e5a0 !important; }
+        .pe-input::placeholder { color: #555; }
+      `}</style>
+
+      {/* Header */}
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        padding: "12px 16px", borderBottom: "1px solid #222",
+      }}>
+        <button onClick={onClose} style={{
+          background: "none", border: "none", color: "#999", padding: "4px",
+          fontSize: "24px", lineHeight: 1,
+        }}>✕</button>
+        <div style={{ fontSize: "15px", fontWeight: 700, color: "#fff" }}>Your Profile</div>
+        <button onClick={handleSave} disabled={saving || loading} style={{
+          background: saving ? "rgba(0,229,160,0.3)" : "#00e5a0",
+          border: "none", borderRadius: "10px", color: "#000",
+          padding: "8px 16px", fontSize: "13px", fontWeight: 700,
+          opacity: saving || loading ? 0.5 : 1,
+        }}>{saving ? "Saving…" : "Save"}</button>
+      </div>
+
+      {/* Content */}
+      <div style={{ flex: 1, overflow: "auto", padding: "20px 16px", scrollbarWidth: "none" }}>
+        {loading ? (
+          <div style={{ textAlign: "center", padding: "60px 0", color: "#666", fontSize: "13px" }}>Loading profile…</div>
+        ) : (
+          <>
+            {/* Avatar + streak summary */}
+            <div style={{ textAlign: "center", marginBottom: "28px" }}>
+              <div style={{
+                width: "64px", height: "64px", borderRadius: "50%", margin: "0 auto 12px",
+                background: "linear-gradient(135deg, #00E5B8, #00b4d8)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: "22px", fontWeight: 800, color: "#000",
+              }}>
+                {(fullName || user?.email || "?").charAt(0).toUpperCase()}
+              </div>
+              {user?.email && (
+                <div style={{ fontSize: "12px", color: "#666", marginBottom: "8px" }}>{user.email}</div>
+              )}
+              {streakData && streakTier && (
+                <div style={{
+                  display: "inline-flex", alignItems: "center", gap: "6px",
+                  padding: "6px 14px", borderRadius: "14px",
+                  background: `${streakTier.color}12`, border: `1px solid ${streakTier.color}25`,
+                }}>
+                  <span style={{ fontSize: "16px" }}>{streakTier.icon}</span>
+                  <span style={{ fontSize: "13px", fontWeight: 700, color: streakTier.color }}>
+                    {streakData.current_streak}-day streak
+                  </span>
+                  <span style={{ fontSize: "11px", color: "#666" }}>· {streakTier.label}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Earned badges */}
+            {earnedBadges.length > 0 && (
+              <div style={{ marginBottom: "24px" }}>
+                <div style={labelStyle}>BADGES EARNED</div>
+                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                  {earnedBadges.map((b) => (
+                    <div key={b.label} style={{
+                      display: "flex", alignItems: "center", gap: "4px",
+                      padding: "5px 10px", borderRadius: "10px",
+                      background: "#111", border: "1px solid #333",
+                    }}>
+                      <span style={{ fontSize: "13px" }}>{b.icon}</span>
+                      <span style={{ fontSize: "11px", fontWeight: 600, color: "#ccc" }}>{b.label}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Stats row */}
+            {streakData && (
+              <div style={{
+                display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px",
+                marginBottom: "28px",
+              }}>
+                {[
+                  { label: "Best Streak", value: `${streakData.longest_streak}d` },
+                  { label: "Active Days", value: streakData.total_active_days },
+                  { label: "Likes Given", value: streakData.total_likes },
+                ].map((s) => (
+                  <div key={s.label} style={{
+                    padding: "12px", borderRadius: "12px", background: "#111",
+                    border: "1px solid #222", textAlign: "center",
+                  }}>
+                    <div style={{ fontSize: "18px", fontWeight: 700, color: "#fff" }}>{s.value}</div>
+                    <div style={{ fontSize: "10px", color: "#666", marginTop: "2px" }}>{s.label}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Editable fields */}
+            <div style={{ marginBottom: "16px" }}>
+              <label style={labelStyle}>Display Name</label>
+              <input className="pe-input" value={fullName} onChange={(e) => setFullName(e.target.value)}
+                placeholder="Your name" style={inputStyle} />
+            </div>
+            <div style={{ marginBottom: "16px" }}>
+              <label style={labelStyle}>Company</label>
+              <input className="pe-input" value={company} onChange={(e) => setCompany(e.target.value)}
+                placeholder="Where do you work?" style={inputStyle} />
+            </div>
+            <div style={{ marginBottom: "16px" }}>
+              <label style={labelStyle}>Job Title</label>
+              <input className="pe-input" value={jobTitle} onChange={(e) => setJobTitle(e.target.value)}
+                placeholder="e.g. Head of Talent Intelligence" style={inputStyle} />
+            </div>
+
+            {/* Member since */}
+            <div style={{ textAlign: "center", padding: "20px 0", fontSize: "11px", color: "#555" }}>
+              Member since {new Date(user?.created_at || Date.now()).toLocaleDateString("en-GB", { month: "long", year: "numeric" })}
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
