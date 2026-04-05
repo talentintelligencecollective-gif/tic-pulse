@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo, Component } from "react";
-import { supabase, fetchArticles, incrementEngagement, trackInteraction, fetchUserAffinities } from "./supabase.js";
+import { supabase, fetchArticles, incrementEngagement, trackInteraction, fetchUserAffinities, updateStreak, incrementStreakCounter, getStreakTier, getEarnedBadges } from "./supabase.js";
 import AuthPage from "./AuthPage.jsx";
 import ArticleCard from "./ArticleCard.jsx";
 import ShareSheet from "./ShareSheet.jsx";
@@ -156,6 +156,9 @@ function PulseApp({ session }) {
   const [sortMode, setSortMode] = useState("latest");
   const [affinities, setAffinities] = useState({});
 
+  // Streaks & badges
+  const [streakData, setStreakData] = useState(null);
+
   // Search debounce
   const [debouncedSearch, setDebouncedSearch] = useState("");
 
@@ -208,12 +211,18 @@ function PulseApp({ session }) {
     fetchUserAffinities(userId).then(setAffinities);
   }, [userId]);
 
+  // ─── Update streak on app open ───
+  useEffect(() => {
+    if (!userId) return;
+    updateStreak(userId).then(setStreakData);
+  }, [userId]);
+
   // ─── Data Loading ───
   const loadArticles = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchArticles({ limit: 100 });
+      const data = await fetchArticles({ limit: 200 });
       setArticles(data);
     } catch (err) {
       console.error("Failed to load articles:", err);
@@ -229,8 +238,10 @@ function PulseApp({ session }) {
   const filteredArticles = useMemo(() => {
     const freshnessCutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
     const filtered = articles.filter((a) => {
-      const pubDate = new Date(a.published_at || a.created_at).getTime();
-      if (pubDate < freshnessCutoff) return false;
+      // Use created_at (when we fetched it) not published_at (original pub date)
+      // Google News surfaces old articles — filtering by published_at hides valid content
+      const fetchDate = new Date(a.created_at || a.published_at).getTime();
+      if (fetchDate < freshnessCutoff) return false;
       const matchesCategory = activeCategory === "All" || a.category === activeCategory;
       if (!matchesCategory) return false;
       if (debouncedSearch) {
@@ -289,6 +300,9 @@ function PulseApp({ session }) {
     if (!wasLiked) {
       const article = articlesRef.current.find((a) => a.id === articleId);
       if (article) trackInteraction(userId, articleId, "like", article);
+      incrementStreakCounter(userId, "total_likes", 1);
+    } else {
+      incrementStreakCounter(userId, "total_likes", -1);
     }
 
     // Persist to Supabase
@@ -317,6 +331,9 @@ function PulseApp({ session }) {
       showToast("Saved to bookmarks");
       const article = articlesRef.current.find((a) => a.id === articleId);
       if (article) trackInteraction(userId, articleId, "bookmark", article);
+      incrementStreakCounter(userId, "total_bookmarks", 1);
+    } else {
+      incrementStreakCounter(userId, "total_bookmarks", -1);
     }
 
     supabase.from("user_engagement").upsert({
@@ -332,7 +349,8 @@ function PulseApp({ session }) {
   const handleShare = useCallback((article) => {
     setShareTarget(article);
     incrementEngagement(article.id, "share_count", 1);
-  }, []);
+    incrementStreakCounter(userId, "total_shares", 1);
+  }, [userId]);
 
   // ─── Curate Mode (Articles) ───
   const handleToggleSelect = useCallback((articleId) => {
@@ -407,6 +425,7 @@ function PulseApp({ session }) {
       <Header
         searchOpen={searchOpen} searchQuery={searchQuery} activeCategory={activeCategory}
         searchInputRef={searchInputRef} user={session?.user} activeTab={activeTab}
+        streakData={streakData}
         onLogout={async () => { await supabase.auth.signOut(); }}
         onToggleSearch={() => { setSearchOpen(!searchOpen); if (searchOpen) setSearchQuery(""); }}
         onSearchChange={setSearchQuery}
@@ -502,13 +521,14 @@ function PulseApp({ session }) {
 //  HEADER
 // ═══════════════════════════════════════════════
 
-function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user, activeTab, onLogout, onToggleSearch, onSearchChange, onCategoryChange }) {
+function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user, activeTab, streakData, onLogout, onToggleSearch, onSearchChange, onCategoryChange }) {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userInitials = user?.user_metadata?.full_name
     ? user.user_metadata.full_name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)
     : (user?.email?.[0] || "?").toUpperCase();
 
   const showCategories = activeTab === "feed";
+  const streakTier = streakData ? getStreakTier(streakData.current_streak) : null;
 
   return (
     <header style={{ position: "sticky", top: 0, zIndex: 100, background: "#000", borderBottom: "1px solid #222" }}>
@@ -524,6 +544,18 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          {/* Streak badge (compact) */}
+          {streakTier && streakData?.current_streak >= 3 && (
+            <div style={{
+              display: "flex", alignItems: "center", gap: "4px", padding: "4px 10px",
+              borderRadius: "12px", background: `${streakTier.color}15`,
+              border: `1px solid ${streakTier.color}30`,
+            }}>
+              <span style={{ fontSize: "12px" }}>{streakTier.icon}</span>
+              <span style={{ fontSize: "11px", fontWeight: 700, color: streakTier.color }}>{streakData.current_streak}</span>
+            </div>
+          )}
+
           <button onClick={onToggleSearch} aria-label={searchOpen ? "Close search" : "Search"}
             style={{ width: "34px", height: "34px", borderRadius: "50%", border: "none", background: searchOpen ? "rgba(0,229,160,0.12)" : "rgba(255,255,255,0.05)", display: "flex", alignItems: "center", justifyContent: "center", color: searchOpen ? "#00e5a0" : "#999" }}>
             {searchOpen ? <CloseIcon size={18} /> : <SearchIcon size={18} />}
@@ -537,8 +569,20 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
               fontSize: "11px", fontWeight: 800, color: "#000", border: "none",
             }}>{userInitials}</button>
             {showUserMenu && (
-              <div style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", background: "#111", borderRadius: "14px", border: "1px solid #333", padding: "4px", minWidth: "160px", boxShadow: "0 8px 40px rgba(0,0,0,0.5)", zIndex: 200 }}>
+              <div style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", background: "#111", borderRadius: "14px", border: "1px solid #333", padding: "4px", minWidth: "200px", boxShadow: "0 8px 40px rgba(0,0,0,0.5)", zIndex: 200 }}>
                 <div style={{ padding: "8px 12px", fontSize: "12px", color: "#666", borderBottom: "1px solid #222" }}>{user?.email}</div>
+                {/* Streak info in menu */}
+                {streakData && (
+                  <div style={{ padding: "10px 12px", borderBottom: "1px solid #222" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "4px" }}>
+                      <span style={{ fontSize: "14px" }}>{streakTier?.icon}</span>
+                      <span style={{ fontSize: "13px", fontWeight: 700, color: streakTier?.color }}>{streakData.current_streak}-day streak</span>
+                    </div>
+                    <div style={{ fontSize: "10px", color: "#666" }}>
+                      {streakTier?.label} · Best: {streakData.longest_streak} days · {streakData.total_active_days} total
+                    </div>
+                  </div>
+                )}
                 <button onClick={() => { setShowUserMenu(false); onLogout(); }} style={{ width: "100%", padding: "10px 12px", background: "none", border: "none", color: "#ff3b5c", fontSize: "13px", fontWeight: 600, textAlign: "left", borderRadius: "10px" }}>Sign out</button>
               </div>
             )}
