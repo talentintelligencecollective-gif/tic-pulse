@@ -112,6 +112,43 @@ export async function fetchUserProfile(userId) {
   }
 }
 
+/**
+ * Update the user's profile and auth metadata.
+ */
+export async function updateUserProfile(userId, { fullName, company, jobTitle }) {
+  if (!userId) return false;
+  try {
+    // Update profiles table
+    const { error: profileErr } = await supabase
+      .from("profiles")
+      .upsert({
+        id: userId,
+        full_name: fullName,
+        company,
+        job_title: jobTitle,
+      }, { onConflict: "id" });
+
+    if (profileErr) {
+      console.error("Profile update error:", profileErr.message);
+      return false;
+    }
+
+    // Update auth metadata (for full_name used in comments etc.)
+    const { error: authErr } = await supabase.auth.updateUser({
+      data: { full_name: fullName },
+    });
+
+    if (authErr) {
+      console.error("Auth metadata update error:", authErr.message);
+    }
+
+    return true;
+  } catch (e) {
+    console.error("updateUserProfile error:", e.message);
+    return false;
+  }
+}
+
 // ═══════════════════════════════════════════════
 //  INTERACTION TRACKING — for personalisation
 // ═══════════════════════════════════════════════
