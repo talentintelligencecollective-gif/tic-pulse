@@ -1,103 +1,98 @@
 // ═══════════════════════════════════════════════════════════════
-//  TIC Pulse — Substack RSS Proxy
-//  Fetches the TIC Substack feed and returns parsed JSON
-//  Called by the Discover tab in the frontend
+//  TIC Pulse — Substack Fetcher (v2)
+//  Uses Substack's archive API instead of RSS for full history.
+//  On-demand Netlify function (called by the TIC Digest tab).
+//
+//  The RSS feed (/feed) only returns ~10-20 most recent posts.
+//  The archive API (/api/v1/archive) supports pagination and
+//  returns the complete post history.
 // ═══════════════════════════════════════════════════════════════
 
-const SUBSTACK_FEED = "https://talentintelligencecollective.substack.com/feed";
+const SUBSTACK_URL = "https://talentintelligencecollective.substack.com";
+const MAX_POSTS = 200; // Safety cap — adjust if TIC has more than this
+const PAGE_SIZE = 25;  // Substack returns up to 25 per request
 
-export default async function handler() {
+export default async function handler(req) {
   try {
-    const response = await fetch(SUBSTACK_FEED, {
-      headers: {
-        "User-Agent": "TIC-Pulse/1.0",
-        "Accept": "application/xml, text/xml, application/rss+xml",
-      },
-      signal: AbortSignal.timeout(10000),
-    });
+    const allPosts = [];
+    let offset = 0;
+    let hasMore = true;
 
-    if (!response.ok) {
-      return new Response(
-        JSON.stringify({ ok: false, error: `Substack returned ${response.status}` }),
-        { status: 502, headers: corsHeaders() }
-      );
+    // Paginate through the archive API
+    while (hasMore && offset < MAX_POSTS) {
+      const url = `${SUBSTACK_URL}/api/v1/archive?sort=new&search=&offset=${offset}&limit=${PAGE_SIZE}`;
+
+      const response = await fetch(url, {
+        headers: {
+          "User-Agent": "TIC-Pulse/1.0",
+          "Accept": "application/json",
+        },
+        signal: AbortSignal.timeout(10000),
+      });
+
+      if (!response.ok) {
+        console.warn(`Substack API ${response.status} at offset ${offset}`);
+        break;
+      }
+
+      const posts = await response.json();
+
+      if (!Array.isArray(posts) || posts.length === 0) {
+        hasMore = false;
+        break;
+      }
+
+      for (const post of posts) {
+        allPosts.push({
+          title: post.title || "",
+          description: post.subtitle || post.description || "",
+          url: post.canonical_url || `${SUBSTACK_URL}/p/${post.slug}`,
+          publishedAt: post.post_date || null,
+          coverImage: post.cover_image || null,
+          wordCount: post.wordcount || null,
+          type: post.type || "newsletter",
+          audience: post.audience || "everyone", // "everyone" | "only_paid"
+        });
+      }
+
+      console.log(`Fetched ${posts.length} posts at offset ${offset} (total: ${allPosts.length})`);
+
+      // If we got fewer than PAGE_SIZE, we've reached the end
+      if (posts.length < PAGE_SIZE) {
+        hasMore = false;
+      }
+
+      offset += PAGE_SIZE;
     }
 
-    const xml = await response.text();
-    const articles = parseRss(xml);
+    // Filter out podcast-only posts if desired (keep all for now)
+    // const articles = allPosts.filter(p => p.type !== "podcast");
+
+    console.log(`TIC Digest: ${allPosts.length} total posts fetched from Substack archive`);
 
     return new Response(
-      JSON.stringify({ ok: true, articles }),
-      { status: 200, headers: corsHeaders() }
+      JSON.stringify({
+        ok: true,
+        articles: allPosts,
+        count: allPosts.length,
+      }),
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          // Cache for 1 hour — the archive doesn't change that often
+          "Cache-Control": "public, max-age=3600",
+        },
+      }
     );
   } catch (err) {
+    console.error("Substack fetch error:", err);
     return new Response(
       JSON.stringify({ ok: false, error: err.message }),
-      { status: 500, headers: corsHeaders() }
+      {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      }
     );
   }
-}
-
-function corsHeaders() {
-  return {
-    "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": "*",
-    "Cache-Control": "public, max-age=900", // cache for 15 minutes
-  };
-}
-
-function parseRss(xml) {
-  const items = [];
-  const itemRegex = /<item>([\s\S]*?)<\/item>/gi;
-  let match;
-
-  while ((match = itemRegex.exec(xml)) !== null) {
-    const x = match[1];
-
-    const title = extractTag(x, "title");
-    const link = extractTag(x, "link");
-    const pubDate = extractTag(x, "pubDate");
-    const description = extractTag(x, "description");
-    const creator = extractTag(x, "dc:creator");
-
-    // Extract cover image from enclosure or content
-    const enclosure = x.match(/<enclosure[^>]+url=["']([^"']+)["']/i);
-    const contentImg = x.match(/<img[^>]+src=["']([^"']+)["']/i);
-    const image = enclosure ? enclosure[1] : contentImg ? contentImg[1] : null;
-
-    if (title && link) {
-      // Clean the description — strip HTML, truncate
-      const cleanDesc = description
-        ? description.replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim().slice(0, 300)
-        : "";
-
-      items.push({
-        title: decode(title),
-        url: decode(link),
-        description: cleanDesc,
-        author: creator ? decode(creator) : "TIC",
-        image,
-        publishedAt: pubDate ? new Date(pubDate).toISOString() : null,
-      });
-    }
-  }
-
-  return items;
-}
-
-function extractTag(xml, tag) {
-  // CDATA
-  const cd = new RegExp(`<${tag}[^>]*><!\\[CDATA\\[([\\s\\S]*?)\\]\\]></${tag}>`, "i");
-  const m1 = xml.match(cd);
-  if (m1) return m1[1].trim();
-  // Regular
-  const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i");
-  const m2 = xml.match(re);
-  return m2 ? m2[1].trim() : null;
-}
-
-function decode(t) {
-  return t.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ")
-    .replace(/<[^>]+>/g, "");
 }
