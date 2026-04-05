@@ -18,15 +18,14 @@ export const supabase = createClient(supabaseUrl || "", supabaseAnonKey || "");
 /**
  * Fetch articles from the articles_feed view.
  * Returns articles sorted by created_at DESC.
- * Limit raised to 200 for global coverage.
  *
  * @param {Object} options
  * @param {string} [options.category] - Filter by category (omit for all)
  * @param {string} [options.search] - Search in title and tldr
- * @param {number} [options.limit=200] - Max articles to return
+ * @param {number} [options.limit=30] - Max articles to return
  * @param {number} [options.offset=0] - Pagination offset
  */
-export async function fetchArticles({ category, search, limit = 200, offset = 0 } = {}) {
+export async function fetchArticles({ category, search, limit = 30, offset = 0 } = {}) {
   let query = supabase
     .from("articles_feed")
     .select("*")
@@ -38,11 +37,8 @@ export async function fetchArticles({ category, search, limit = 200, offset = 0 
   }
 
   if (search) {
-    // Sanitise: escape PostgREST special chars to prevent filter injection
-    const safe = search.replace(/[%_\\()"',.*]/g, "");
-    if (safe.length > 0) {
-      query = query.or(`title.ilike.%${safe}%,tldr.ilike.%${safe}%`);
-    }
+    // Search across title and tldr
+    query = query.or(`title.ilike.%${search}%,tldr.ilike.%${search}%`);
   }
 
   const { data, error } = await query;
@@ -92,80 +88,21 @@ export async function fetchCategoryCounts() {
 }
 
 // ═══════════════════════════════════════════════
-//  INTERACTION TRACKING — for personalisation
-// ═══════════════════════════════════════════════
-
-/**
- * Log a user interaction for personalisation.
- * Called on like, bookmark, share, and article click (open external link).
- *
- * @param {string} userId - The user's auth ID
- * @param {string} articleId - UUID of the article
- * @param {string} type - One of: 'view', 'like', 'bookmark', 'share', 'click'
- * @param {Object} article - The article object (for denormalised category/tags/region)
- */
-export async function trackInteraction(userId, articleId, type, article = {}) {
-  if (!userId || !articleId) return;
-
-  const { error } = await supabase.from("user_interactions").insert({
-    user_id: userId,
-    article_id: articleId,
-    interaction_type: type,
-    category: article.category || null,
-    tags: article.tags || [],
-    region: article.region || null,
-  });
-
-  if (error && error.code !== "23505") {
-    console.error("trackInteraction error:", error.message);
-  }
-}
-
-/**
- * Fetch the current user's category affinities for personalisation.
- * Returns { "Talent Strategy": { count: 12, recent: 5 }, ... }
- *
- * @param {string} userId
- * @returns {Object} Category affinity scores
- */
-export async function fetchUserAffinities(userId) {
-  if (!userId) return {};
-
-  const { data, error } = await supabase
-    .from("user_affinities")
-    .select("*")
-    .eq("user_id", userId);
-
-  if (error || !data) return {};
-
-  const affinities = {};
-  for (const row of data) {
-    affinities[row.category] = {
-      total: row.interaction_count,
-      likes: row.like_count,
-      bookmarks: row.bookmark_count,
-      clicks: row.click_count,
-      recent: row.recent_count,
-    };
-  }
-  return affinities;
-}
-
-// ═══════════════════════════════════════════════
 //  NEWSLETTER & BRAND GUIDELINES
-//  (used by NewsletterBuilder.jsx)
 // ═══════════════════════════════════════════════
 
 /**
- * Load user's saved newsletter preferences (theme, sender name, etc.)
+ * Load user's saved newsletter preferences (company name, theme, sender name, etc.)
  */
-export async function loadUserPreferences(userId) {
+export async function loadNewsletterPrefs(userId) {
   if (!userId) return null;
   try {
     const { data, error } = await supabase
       .from("user_engagement")
       .select("newsletter_prefs")
       .eq("user_id", userId)
+      .not("newsletter_prefs", "is", null)
+      .limit(1)
       .maybeSingle();
     if (error || !data) return null;
     return data.newsletter_prefs || null;
@@ -175,32 +112,37 @@ export async function loadUserPreferences(userId) {
 }
 
 /**
- * Save user's newsletter preferences
+ * Save user's newsletter preferences.
+ * Upserts into user_engagement keyed on user_id + a sentinel article_id.
  */
-export async function saveUserPreferences(userId, prefs) {
+export async function saveNewsletterPrefs(userId, prefs) {
   if (!userId) return;
   try {
+    // Use a fixed sentinel article_id for newsletter prefs storage
+    const PREFS_SENTINEL = "00000000-0000-0000-0000-000000000000";
     await supabase.from("user_engagement").upsert({
       user_id: userId,
+      article_id: PREFS_SENTINEL,
       newsletter_prefs: prefs,
       updated_at: new Date().toISOString(),
-    }, { onConflict: "user_id" });
+    }, { onConflict: "user_id,article_id" });
   } catch (e) {
-    console.error("saveUserPreferences error:", e.message);
+    console.error("saveNewsletterPrefs error:", e.message);
   }
 }
 
 /**
  * Look up brand guidelines for a company name.
  * Returns the full colour palette + typography for newsletter theming.
+ * Uses case-insensitive partial matching.
  */
 export async function lookupBrandGuidelines(companyName) {
-  if (!companyName) return null;
+  if (!companyName || companyName.trim().length < 2) return null;
   try {
     const { data, error } = await supabase
       .from("brand_guidelines")
       .select("*")
-      .ilike("company_name", `%${companyName}%`)
+      .ilike("company_name", `%${companyName.trim()}%`)
       .limit(1)
       .maybeSingle();
     if (error || !data) return null;
@@ -211,10 +153,52 @@ export async function lookupBrandGuidelines(companyName) {
 }
 
 /**
- * Send newsletter email via edge function (placeholder).
- * Currently downloads HTML — email sending requires a backend email service.
+ * Save custom brand colours to the brand_guidelines table.
+ * Creates a new row if the company doesn't exist, updates if it does.
  */
-export async function sendNewsletterEmail({ to, subject, html }) {
-  console.log("sendNewsletterEmail called — email delivery requires backend integration (e.g. Resend, SendGrid).");
-  return { ok: false, message: "Email sending not yet configured. Use 'Download HTML' or 'Copy to clipboard' instead." };
+export async function saveBrandGuidelines({ companyName, colors }) {
+  if (!companyName || !colors) return null;
+  try {
+    const existing = await lookupBrandGuidelines(companyName);
+    if (existing) {
+      // Update existing
+      const { data, error } = await supabase
+        .from("brand_guidelines")
+        .update({
+          color_primary: colors.accent,
+          color_header_bg: colors.headerBg,
+          color_body_bg: colors.bg,
+          color_card_bg: colors.cardBg,
+          color_text_primary: colors.textPrimary,
+          color_text_secondary: colors.textSecondary,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", existing.id)
+        .select()
+        .maybeSingle();
+      return data;
+    } else {
+      // Insert new
+      const { data, error } = await supabase
+        .from("brand_guidelines")
+        .insert({
+          company_name: companyName.trim(),
+          industry: "User-defined",
+          color_primary: colors.accent,
+          color_header_bg: colors.headerBg,
+          color_body_bg: colors.bg,
+          color_card_bg: colors.cardBg,
+          color_text_primary: colors.textPrimary,
+          color_text_secondary: colors.textSecondary || "#666666",
+          source_confidence: "user",
+          notes: "Added via TIC Pulse newsletter builder",
+        })
+        .select()
+        .maybeSingle();
+      return data;
+    }
+  } catch (e) {
+    console.error("saveBrandGuidelines error:", e.message);
+    return null;
+  }
 }
