@@ -1,25 +1,22 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { generateNewsletterHtml, NEWSLETTER_THEMES } from "./emailTemplate.js";
-import { supabase, loadUserPreferences, saveUserPreferences, lookupBrandGuidelines, sendNewsletterEmail } from "./supabase.js";
+import { lookupBrandGuidelines, saveBrandGuidelines, loadNewsletterPrefs, saveNewsletterPrefs } from "./supabase.js";
 
 // ─── Theme Swatch ───
 
-function ThemeSwatch({ theme, isActive, onClick, badge }) {
+function ThemeSwatch({ theme, isActive, onClick }) {
   return (
     <button onClick={onClick} style={{
       width: "100%", padding: "12px", borderRadius: "12px",
-      border: isActive ? `2px solid ${theme.accent}` : "2px solid #2a3348",
-      background: "#111827", cursor: "pointer", textAlign: "left", position: "relative",
+      border: isActive ? `2px solid ${theme.accent}` : "2px solid #333",
+      background: "#111", cursor: "pointer", textAlign: "left",
     }}>
-      {badge && (
-        <span style={{ position: "absolute", top: 6, right: 6, fontSize: "8px", fontWeight: 700, color: "#000", background: "#00e5a0", padding: "2px 6px", borderRadius: 6, letterSpacing: "0.5px" }}>{badge}</span>
-      )}
       <div style={{ display: "flex", gap: "3px", marginBottom: "8px" }}>
         {[theme.headerBg, theme.bg, theme.cardBg, theme.accent].map((c, i) => (
           <div key={i} style={{
             flex: 1, height: "20px", background: c,
             borderRadius: i === 0 ? "4px 0 0 4px" : i === 3 ? "0 4px 4px 0" : "0",
-            border: "1px solid #2a3348",
+            border: "1px solid #333",
           }} />
         ))}
       </div>
@@ -44,17 +41,15 @@ function ColorRow({ label, value, onChange }) {
   );
 }
 
+// ─── Inline content type helpers ───
+
+const videoTypeLabel = (t) => ({ podcast: "Podcast", event: "Event", panel: "Panel", short: "Short", video: "Video" }[t] || "Video");
+
 // ═══════════════════════════════════════════════
-//  NEWSLETTER BUILDER — Phase 3
-//  - Auto-loads user preferences + brand guidelines
-//  - Pre-populates sender name, intro, theme, colours
-//  - Remembers changes (debounced save to Supabase)
-//  - Supports media items (videos + episodes)
-//  - Improved email export UX
+//  NEWSLETTER BUILDER
 // ═══════════════════════════════════════════════
 
-export default function NewsletterBuilder({ articles, mediaItems = [], onClose, onToast, userId, session }) {
-  // ─── State ───
+export default function NewsletterBuilder({ articles = [], videos = [], episodes = [], userId, onClose, onToast }) {
   const [activeThemeId, setActiveThemeId] = useState("pulse");
   const [customColors, setCustomColors] = useState({ ...NEWSLETTER_THEMES.custom });
   const [title, setTitle] = useState("Talent Intelligence Briefing");
@@ -62,144 +57,111 @@ export default function NewsletterBuilder({ articles, mediaItems = [], onClose, 
   const [senderName, setSenderName] = useState("");
   const [activePanel, setActivePanel] = useState("theme");
   const [copied, setCopied] = useState(false);
+
+  // Brand lookup state
+  const [companyName, setCompanyName] = useState("");
+  const [brandLookupState, setBrandLookupState] = useState("idle"); // idle | searching | found | notfound
+  const [brandData, setBrandData] = useState(null);
+  const lookupTimerRef = useRef(null);
+
+  // Prefs loaded flag
   const [prefsLoaded, setPrefsLoaded] = useState(false);
-  const [brandMatch, setBrandMatch] = useState(null); // matched brand_guidelines row
-  const [showBrandPrompt, setShowBrandPrompt] = useState(false);
-  const [emailStep, setEmailStep] = useState(0);
-  const [recipientEmail, setRecipientEmail] = useState("");
-  const [sending, setSending] = useState(false);
-  const [sent, setSent] = useState(false);
 
   const previewRef = useRef(null);
-  const saveTimerRef = useRef(null);
 
-  // ─── Derive user info from session ───
-  const userName = session?.user?.user_metadata?.full_name || "";
-
-  // ─── Load preferences + brand guidelines on mount ───
+  // ─── Load saved preferences on mount ───
   useEffect(() => {
     if (!userId) { setPrefsLoaded(true); return; }
-
-    async function init() {
-      // 1. Load saved preferences
-      const prefs = await loadUserPreferences(userId);
-
-      // 2. Load company from profiles table (company is NOT in user_metadata)
-      let company = "";
-      try {
-        const { data: profile } = await supabase
-          .from("profiles")
-          .select("company, full_name")
-          .eq("id", userId)
-          .single();
-        if (profile) company = profile.company || "";
-      } catch {}
-
+    loadNewsletterPrefs(userId).then((prefs) => {
       if (prefs) {
-        // Restore saved preferences
-        if (prefs.newsletter_theme_id) setActiveThemeId(prefs.newsletter_theme_id);
-        if (prefs.newsletter_custom_colors) setCustomColors(prefs.newsletter_custom_colors);
-        if (prefs.newsletter_intro) setIntroText(prefs.newsletter_intro);
-        if (prefs.newsletter_title) setTitle(prefs.newsletter_title);
-        // Sender name: saved preference > profile name
-        setSenderName(prefs.newsletter_sender_name || userName || "");
-      } else {
-        // First time: pre-populate from profile
-        setSenderName(userName || "");
+        if (prefs.senderName) setSenderName(prefs.senderName);
+        if (prefs.companyName) setCompanyName(prefs.companyName);
+        if (prefs.themeId) setActiveThemeId(prefs.themeId);
+        if (prefs.customColors) setCustomColors(prefs.customColors);
+        if (prefs.title) setTitle(prefs.title);
       }
-
-      // 3. Brand guidelines lookup (if no saved brand preference yet)
-      if (company && (!prefs || prefs.brand_source === "none")) {
-        try {
-          const brand = await lookupBrandGuidelines(company);
-          if (brand) {
-            setBrandMatch(brand);
-            // Auto-apply brand colours to custom theme
-            const brandColors = {
-              ...NEWSLETTER_THEMES.custom,
-              accent: brand.color_primary || NEWSLETTER_THEMES.custom.accent,
-              headerBg: brand.color_header_bg || NEWSLETTER_THEMES.custom.headerBg,
-              bg: brand.color_body_bg || NEWSLETTER_THEMES.custom.bg,
-              cardBg: brand.color_card_bg || NEWSLETTER_THEMES.custom.cardBg,
-              textPrimary: brand.color_text_primary || NEWSLETTER_THEMES.custom.textPrimary,
-              textSecondary: brand.color_text_secondary || NEWSLETTER_THEMES.custom.textSecondary,
-              border: brand.color_divider || NEWSLETTER_THEMES.custom.border,
-              name: `${brand.company_name} Brand`,
-              description: `Auto-matched from ${brand.company_name} guidelines`,
-            };
-            setCustomColors(brandColors);
-            // Show prompt asking if these are their corporate colours
-            if (!prefs || prefs.brand_source === "none") {
-              setShowBrandPrompt(true);
-            }
-          }
-        } catch (e) {
-          console.error("Brand lookup failed:", e);
-        }
-      } else if (prefs && prefs.brand_source !== "none" && prefs.newsletter_custom_colors) {
-        // Already have saved brand preference, use it
-        setCustomColors(prefs.newsletter_custom_colors);
-      }
-
       setPrefsLoaded(true);
-    }
-    init();
-  }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
+    });
+  }, [userId]);
 
-  // ─── Debounced save preferences ───
-  const persistPrefs = useCallback(() => {
+  // ─── Save preferences when they change (debounced) ───
+  const saveTimerRef = useRef(null);
+  useEffect(() => {
     if (!userId || !prefsLoaded) return;
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      saveUserPreferences(userId, {
-        newsletter_theme_id: activeThemeId,
-        newsletter_custom_colors: customColors,
-        newsletter_intro: introText,
-        newsletter_sender_name: senderName,
-        newsletter_title: title,
+      saveNewsletterPrefs(userId, {
+        senderName,
+        companyName,
+        themeId: activeThemeId,
+        customColors,
+        title,
       });
     }, 1500);
-  }, [userId, prefsLoaded, activeThemeId, customColors, introText, senderName, title]);
+    return () => clearTimeout(saveTimerRef.current);
+  }, [userId, senderName, companyName, activeThemeId, customColors, title, prefsLoaded]);
 
-  useEffect(() => {
-    if (prefsLoaded) persistPrefs();
-  }, [activeThemeId, customColors, introText, senderName, title, persistPrefs, prefsLoaded]);
+  // ─── Brand lookup with debounce ───
+  const handleCompanyNameChange = useCallback((name) => {
+    setCompanyName(name);
+    clearTimeout(lookupTimerRef.current);
 
-  // Cleanup save timer
-  useEffect(() => {
-    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
+    if (!name || name.trim().length < 2) {
+      setBrandLookupState("idle");
+      setBrandData(null);
+      return;
+    }
+
+    setBrandLookupState("searching");
+    lookupTimerRef.current = setTimeout(async () => {
+      const result = await lookupBrandGuidelines(name);
+      if (result) {
+        setBrandLookupState("found");
+        setBrandData(result);
+        // Auto-fill the custom colors from brand guidelines
+        setCustomColors((prev) => ({
+          ...prev,
+          accent: result.color_primary || prev.accent,
+          headerBg: result.color_header_bg || prev.headerBg,
+          bg: result.color_body_bg || prev.bg,
+          cardBg: result.color_card_bg || prev.cardBg,
+          textPrimary: result.color_text_primary || prev.textPrimary,
+          textSecondary: result.color_text_secondary || prev.textSecondary,
+        }));
+        // Auto-switch to custom theme
+        setActiveThemeId("custom");
+      } else {
+        setBrandLookupState("notfound");
+        setBrandData(null);
+      }
+    }, 600);
   }, []);
 
-  // ─── Brand prompt handler ───
-  const handleBrandChoice = async (choice) => {
-    // choice: 'corporate' or 'personal'
-    setShowBrandPrompt(false);
-    if (choice === "corporate" && brandMatch) {
-      // Auto-select custom theme with brand colours
-      setActiveThemeId("custom");
-      await saveUserPreferences(userId, {
-        brand_source: "corporate",
-        brand_company_match: brandMatch.company_name,
-        newsletter_theme_id: "custom",
-        newsletter_custom_colors: customColors,
-      });
-      onToast?.(`${brandMatch.company_name} brand colours applied`);
+  // ─── Save custom brand colours back to Supabase ───
+  const handleSaveBrandColors = useCallback(async () => {
+    if (!companyName || companyName.trim().length < 2) return;
+    const result = await saveBrandGuidelines({
+      companyName,
+      colors: customColors,
+    });
+    if (result) {
+      onToast(`${companyName} brand colours saved`);
     } else {
-      await saveUserPreferences(userId, { brand_source: "personal" });
+      onToast("Couldn't save brand colours — check permissions");
     }
-  };
+  }, [companyName, customColors, onToast]);
 
-  // ─── Theme + HTML ───
   const activeTheme = useMemo(() => {
     if (activeThemeId === "custom") return { ...customColors, id: "custom" };
     return NEWSLETTER_THEMES[activeThemeId];
   }, [activeThemeId, customColors]);
 
-  const totalItems = articles.length + mediaItems.length;
-
   const html = useMemo(() => {
-    return generateNewsletterHtml({ articles, mediaItems, theme: activeTheme, introText, senderName, newsletterTitle: title });
-  }, [articles, mediaItems, activeTheme, introText, senderName, title]);
+    return generateNewsletterHtml({
+      articles, videos, episodes,
+      theme: activeTheme, introText, senderName, newsletterTitle: title,
+    });
+  }, [articles, videos, episodes, activeTheme, introText, senderName, title]);
 
   useEffect(() => {
     if (previewRef.current && activePanel === "preview") {
@@ -208,7 +170,6 @@ export default function NewsletterBuilder({ articles, mediaItems = [], onClose, 
     }
   }, [html, activePanel]);
 
-  // ─── Export handlers ───
   const handleCopyHtml = async () => {
     try {
       await navigator.clipboard.writeText(html);
@@ -219,7 +180,7 @@ export default function NewsletterBuilder({ articles, mediaItems = [], onClose, 
       document.body.removeChild(ta);
     }
     setCopied(true);
-    onToast?.("Newsletter HTML copied to clipboard");
+    onToast("Newsletter HTML copied to clipboard");
     setTimeout(() => setCopied(false), 2500);
   };
 
@@ -230,54 +191,41 @@ export default function NewsletterBuilder({ articles, mediaItems = [], onClose, 
     a.href = url; a.download = `tic-pulse-briefing-${new Date().toISOString().slice(0, 10)}.html`;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    onToast?.("Newsletter downloaded as HTML");
+    onToast("Newsletter downloaded as HTML");
   };
 
   const handlePrintPdf = () => {
     const w = window.open("", "_blank");
-    if (!w) { onToast?.("Please allow pop-ups to save as PDF"); return; }
+    if (!w) { onToast("Please allow pop-ups to save as PDF"); return; }
     w.document.write(html); w.document.close();
     w.onload = () => setTimeout(() => w.print(), 400);
-    onToast?.("Use 'Save as PDF' in the print dialog");
+    onToast("Use 'Save as PDF' in the print dialog");
   };
 
   const handleEmailWithHtml = () => {
-    // Step 1: Download the HTML file
     handleDownloadHtml();
-    setEmailStep(1);
-
-    // Step 2: After a short delay, open mailto
-    setTimeout(() => {
-      const subject = encodeURIComponent(title);
-      const body = encodeURIComponent(
-        `Hi,\n\nPlease find attached the latest ${title}.\n\n` +
-        `The HTML file has been downloaded to your device — please attach it to this email.\n\n` +
-        `Curated with TIC Pulse\n`
-      );
-      window.open(`mailto:?subject=${subject}&body=${body}`, "_self");
-      setEmailStep(2);
-      // Reset after 5s
-      setTimeout(() => setEmailStep(0), 5000);
-    }, 800);
+    const subject = encodeURIComponent(title);
+    const body = encodeURIComponent(
+      `Hi,\n\nPlease find attached the latest ${title}.\n\n` +
+      `The HTML file has been downloaded to your device — attach it to this email, ` +
+      `or open it in your browser and copy the content into your email tool.\n\n` +
+      `Curated with TIC Pulse\n`
+    );
+    setTimeout(() => window.open(`mailto:?subject=${subject}&body=${body}`, "_self"), 500);
   };
 
-  // ─── Render helpers ───
   const themeList = Object.values(NEWSLETTER_THEMES);
+  const totalItems = articles.length + videos.length + episodes.length;
+
   const inputStyle = {
     width: "100%", padding: "12px 14px", borderRadius: "12px",
-    border: "1px solid #2a3348", background: "#111827", color: "#eee",
+    border: "1px solid #333", background: "#111", color: "#eee",
     fontSize: "14px", outline: "none", fontFamily: "'DM Sans', sans-serif",
   };
 
-  // All content items for the content panel
-  const allItems = [
-    ...articles.map((a) => ({ ...a, _type: "article" })),
-    ...mediaItems.map((m) => ({ ...m, _type: m._mediaType || "media" })),
-  ];
-
   return (
     <div style={{
-      position: "fixed", inset: 0, zIndex: 2000, background: "#0b1120",
+      position: "fixed", inset: 0, zIndex: 2000, background: "#000",
       display: "flex", flexDirection: "column", maxWidth: "480px", margin: "0 auto",
     }}>
       <style>{`
@@ -285,73 +233,32 @@ export default function NewsletterBuilder({ articles, mediaItems = [], onClose, 
         .nb-anim { animation: nbFade 0.2s ease; }
         .nb-input::placeholder { color: #555; }
         .nb-input:focus { border-color: #00e5a0 !important; }
+        @keyframes nbPulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
       `}</style>
 
       {/* ── Header ── */}
       <div style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "12px 16px", borderBottom: "1px solid #1f2937", background: "#0b1120",
+        padding: "12px 16px", borderBottom: "1px solid #222", background: "#000",
       }}>
         <button onClick={onClose} style={{
-          background: "none", border: "none", color: "#9ca3af", padding: "4px",
+          background: "none", border: "none", color: "#999", padding: "4px",
           display: "flex", alignItems: "center", fontSize: "24px", lineHeight: 1,
         }}>✕</button>
         <div style={{ textAlign: "center" }}>
           <div style={{ fontSize: "15px", fontWeight: 700, color: "#fff" }}>Newsletter Builder</div>
           <div style={{ fontSize: "11px", color: "#666" }}>
-            {totalItems} item{totalItems !== 1 ? "s" : ""} selected
+            {totalItems} item{totalItems !== 1 ? "s" : ""}
+            {articles.length > 0 && ` · ${articles.length} article${articles.length !== 1 ? "s" : ""}`}
+            {videos.length > 0 && ` · ${videos.length} video${videos.length !== 1 ? "s" : ""}`}
+            {episodes.length > 0 && ` · ${episodes.length} episode${episodes.length !== 1 ? "s" : ""}`}
           </div>
         </div>
         <div style={{ width: "30px" }} />
       </div>
 
-      {/* ── Brand Prompt Overlay ── */}
-      {showBrandPrompt && brandMatch && (
-        <div style={{
-          position: "absolute", top: 0, left: 0, right: 0, bottom: 0, zIndex: 10,
-          background: "rgba(0,0,0,0.85)", display: "flex", alignItems: "center", justifyContent: "center",
-          padding: "24px",
-        }}>
-          <div className="nb-anim" style={{
-            background: "#111827", border: "1px solid #2a3348", borderRadius: "20px",
-            padding: "28px 24px", maxWidth: "340px", width: "100%", textAlign: "center",
-          }}>
-            <div style={{ fontSize: "32px", marginBottom: "12px" }}>🎨</div>
-            <h3 style={{ fontSize: "16px", fontWeight: 700, color: "#eee", margin: "0 0 8px", fontFamily: "Georgia, serif" }}>
-              {brandMatch.company_name} colours found
-            </h3>
-            <p style={{ fontSize: "13px", color: "#888", lineHeight: 1.6, margin: "0 0 6px" }}>
-              We matched your company's brand guidelines. Would you like to use these as your newsletter colours?
-            </p>
-            {/* Preview swatch */}
-            <div style={{ display: "flex", gap: "3px", margin: "16px 0", borderRadius: "8px", overflow: "hidden" }}>
-              {[brandMatch.color_header_bg, brandMatch.color_body_bg, brandMatch.color_primary, brandMatch.color_accent || brandMatch.color_secondary].filter(Boolean).map((c, i) => (
-                <div key={i} style={{ flex: 1, height: "28px", background: c }} />
-              ))}
-            </div>
-            <p style={{ fontSize: "11px", color: "#666", margin: "0 0 20px" }}>
-              Are these your corporate colours or a personal preference?
-            </p>
-            <div style={{ display: "flex", gap: "8px" }}>
-              <button onClick={() => handleBrandChoice("corporate")} style={{
-                flex: 1, padding: "12px", borderRadius: "12px", border: "1px solid #00e5a0",
-                background: "rgba(0,229,160,0.08)", color: "#00e5a0", fontSize: "13px", fontWeight: 700,
-              }}>Corporate colours</button>
-              <button onClick={() => handleBrandChoice("personal")} style={{
-                flex: 1, padding: "12px", borderRadius: "12px", border: "1px solid #374151",
-                background: "#1a2035", color: "#ccc", fontSize: "13px", fontWeight: 600,
-              }}>Personal pref</button>
-            </div>
-            <button onClick={() => setShowBrandPrompt(false)} style={{
-              background: "none", border: "none", color: "#666", fontSize: "12px",
-              marginTop: "12px", padding: "6px",
-            }}>Skip for now</button>
-          </div>
-        </div>
-      )}
-
       {/* ── Tabs ── */}
-      <div style={{ display: "flex", padding: "8px 16px", gap: "4px", borderBottom: "1px solid #1f2937" }}>
+      <div style={{ display: "flex", padding: "8px 16px", gap: "4px", borderBottom: "1px solid #222" }}>
         {[
           { id: "theme", label: "Theme" },
           { id: "content", label: "Content" },
@@ -362,7 +269,7 @@ export default function NewsletterBuilder({ articles, mediaItems = [], onClose, 
             flex: 1, padding: "8px", borderRadius: "10px", border: "none",
             fontSize: "12px", fontWeight: 700,
             background: activePanel === tab.id ? "rgba(0,229,160,0.12)" : "transparent",
-            color: activePanel === tab.id ? "#00e5a0" : "#888",
+            color: activePanel === tab.id ? "#00e5a0" : "#666",
           }}>{tab.label}</button>
         ))}
       </div>
@@ -378,24 +285,68 @@ export default function NewsletterBuilder({ articles, mediaItems = [], onClose, 
             </p>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
               {themeList.map((theme) => (
-                <ThemeSwatch key={theme.id} theme={theme.id === "custom" ? { ...theme, ...customColors } : theme}
+                <ThemeSwatch key={theme.id} theme={theme}
                   isActive={activeThemeId === theme.id}
-                  onClick={() => setActiveThemeId(theme.id)}
-                  badge={theme.id === "custom" && brandMatch ? "AUTO" : null} />
+                  onClick={() => setActiveThemeId(theme.id)} />
               ))}
             </div>
+
+            {/* ── Brand Lookup (shown when Custom is selected) ── */}
             {activeThemeId === "custom" && (
               <div className="nb-anim" style={{
-                marginTop: "20px", padding: "16px", background: "#111827",
-                borderRadius: "14px", border: "1px solid #2a3348",
+                marginTop: "20px", padding: "16px", background: "#111",
+                borderRadius: "14px", border: "1px solid #333",
               }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
-                  <div style={{ fontSize: "13px", fontWeight: 700, color: "#eee" }}>
-                    {brandMatch ? `${brandMatch.company_name} Brand Colours` : "Custom Brand Colours"}
+                {/* Company Name Input */}
+                <div style={{ marginBottom: "16px" }}>
+                  <label style={{ display: "block", fontSize: "11px", fontWeight: 700, color: "#888", letterSpacing: "0.8px", marginBottom: "6px" }}>
+                    COMPANY NAME
+                  </label>
+                  <div style={{ position: "relative" }}>
+                    <input
+                      className="nb-input"
+                      value={companyName}
+                      onChange={(e) => handleCompanyNameChange(e.target.value)}
+                      placeholder="Type to auto-detect brand colours…"
+                      style={{ ...inputStyle, paddingRight: "40px" }}
+                    />
+                    {/* Status indicator */}
+                    <div style={{ position: "absolute", right: "14px", top: "50%", transform: "translateY(-50%)" }}>
+                      {brandLookupState === "searching" && (
+                        <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#f59e0b", animation: "nbPulse 1s ease infinite" }} />
+                      )}
+                      {brandLookupState === "found" && (
+                        <span style={{ fontSize: "14px" }}>✓</span>
+                      )}
+                      {brandLookupState === "notfound" && (
+                        <span style={{ fontSize: "11px", color: "#666" }}>—</span>
+                      )}
+                    </div>
                   </div>
-                  {brandMatch && (
-                    <span style={{ fontSize: "9px", fontWeight: 700, color: "#00e5a0", background: "rgba(0,229,160,0.1)", padding: "2px 8px", borderRadius: "6px" }}>AUTO-MATCHED</span>
+
+                  {/* Brand match feedback */}
+                  {brandLookupState === "found" && brandData && (
+                    <div style={{
+                      marginTop: "8px", padding: "8px 12px", borderRadius: "8px",
+                      background: "rgba(0,229,160,0.06)", border: "1px solid rgba(0,229,160,0.15)",
+                    }}>
+                      <div style={{ fontSize: "12px", color: "#00e5a0", fontWeight: 600 }}>
+                        ✓ Matched: {brandData.company_name}
+                      </div>
+                      <div style={{ fontSize: "10px", color: "#666", marginTop: "2px" }}>
+                        {brandData.industry} · Brand colours applied below
+                      </div>
+                    </div>
                   )}
+                  {brandLookupState === "notfound" && (
+                    <div style={{ marginTop: "6px", fontSize: "11px", color: "#666" }}>
+                      No brand colours found — set them manually below and save
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ fontSize: "13px", fontWeight: 700, color: "#eee", marginBottom: "8px" }}>
+                  Brand Colours
                 </div>
                 <ColorRow label="Accent" value={customColors.accent}
                   onChange={(v) => setCustomColors((p) => ({ ...p, accent: v }))} />
@@ -407,6 +358,21 @@ export default function NewsletterBuilder({ articles, mediaItems = [], onClose, 
                   onChange={(v) => setCustomColors((p) => ({ ...p, cardBg: v }))} />
                 <ColorRow label="Text" value={customColors.textPrimary}
                   onChange={(v) => setCustomColors((p) => ({ ...p, textPrimary: v }))} />
+
+                {/* Save brand colours button */}
+                {companyName.trim().length >= 2 && (
+                  <button onClick={handleSaveBrandColors} style={{
+                    width: "100%", marginTop: "14px", padding: "10px", borderRadius: "10px",
+                    border: "1px solid #333", background: "#1a1a1e", color: "#ccc",
+                    fontSize: "12px", fontWeight: 600, cursor: "pointer",
+                    transition: "all 0.2s",
+                  }}
+                    onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#00e5a0"; e.currentTarget.style.color = "#00e5a0"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#333"; e.currentTarget.style.color = "#ccc"; }}
+                  >
+                    {brandLookupState === "found" ? `Update ${brandData?.company_name} colours` : `Save ${companyName.trim()} colours`}
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -427,7 +393,7 @@ export default function NewsletterBuilder({ articles, mediaItems = [], onClose, 
                 PERSONAL INTRO
               </label>
               <p style={{ fontSize: "11px", color: "#555", margin: "0 0 6px" }}>
-                {introText ? "Your saved intro — edit anytime" : "Optional opening paragraph for your audience"}
+                Optional opening paragraph for your audience
               </p>
               <textarea className="nb-input" value={introText} onChange={(e) => setIntroText(e.target.value)}
                 placeholder="Good morning team — here are this week's key talent intelligence stories..."
@@ -435,52 +401,97 @@ export default function NewsletterBuilder({ articles, mediaItems = [], onClose, 
             </div>
             <div style={{ marginBottom: "18px" }}>
               <label style={{ display: "block", fontSize: "11px", fontWeight: 700, color: "#888", letterSpacing: "0.8px", marginBottom: "6px" }}>
-                CREATED BY
+                YOUR NAME
               </label>
               <input className="nb-input" value={senderName} onChange={(e) => setSenderName(e.target.value)}
-                placeholder="Your name" style={inputStyle} />
-              {senderName && senderName !== userName && (
-                <p style={{ fontSize: "10px", color: "#555", margin: "4px 0 0" }}>
-                  Your preference is saved — we'll remember this
-                </p>
-              )}
+                placeholder="Appears as 'Curated by...'" style={inputStyle} />
             </div>
 
-            {/* Content items list */}
-            <div>
-              <label style={{ display: "block", fontSize: "11px", fontWeight: 700, color: "#888", letterSpacing: "0.8px", marginBottom: "6px" }}>
-                CONTENT ({totalItems} ITEMS)
-              </label>
-              {allItems.map((item, i) => {
-                const typeIcon = item._type === "video" ? "▶" : item._type === "episode" ? "🎧" : "📰";
-                const typeLabel = item._type === "video" ? "Video" : item._type === "episode" ? "Podcast" : item.source_name || "Article";
-                const subtitle = item._type === "article" ? `${item.source_name || ""} · ${item.category || ""}` :
-                  item._type === "video" ? `${item.channel_title || item.sources?.name || ""} · ${item.duration || ""}` :
-                  `${item.sources?.name || ""} · ${item.duration || ""}`;
-                return (
-                  <div key={item.id} style={{
+            {/* ── Articles ── */}
+            {articles.length > 0 && (
+              <div style={{ marginBottom: "18px" }}>
+                <label style={{ display: "block", fontSize: "11px", fontWeight: 700, color: "#888", letterSpacing: "0.8px", marginBottom: "6px" }}>
+                  📰 ARTICLES ({articles.length})
+                </label>
+                {articles.map((a, i) => (
+                  <div key={a.id} style={{
                     display: "flex", alignItems: "center", gap: "10px", padding: "10px 12px",
-                    background: "#111827", borderRadius: "10px", border: "1px solid #1f2937", marginBottom: "6px",
+                    background: "#111", borderRadius: "10px", border: "1px solid #222", marginBottom: "6px",
                   }}>
-                    <span style={{ fontSize: "14px", width: "22px", textAlign: "center", flexShrink: 0 }}>{typeIcon}</span>
+                    <span style={{ fontSize: "12px", fontWeight: 800, color: "#444", width: "18px" }}>{i + 1}</span>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{
                         fontSize: "12px", fontWeight: 600, color: "#ddd",
                         overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                      }}>{item.title}</div>
-                      <div style={{ fontSize: "10px", color: "#666" }}>{subtitle}</div>
+                      }}>{a.title}</div>
+                      <div style={{ fontSize: "10px", color: "#666" }}>{a.source_name} · {a.category}</div>
                     </div>
                   </div>
-                );
-              })}
-            </div>
+                ))}
+              </div>
+            )}
+
+            {/* ── Videos ── */}
+            {videos.length > 0 && (
+              <div style={{ marginBottom: "18px" }}>
+                <label style={{ display: "block", fontSize: "11px", fontWeight: 700, color: "#888", letterSpacing: "0.8px", marginBottom: "6px" }}>
+                  ▶ VIDEOS ({videos.length})
+                </label>
+                {videos.map((v, i) => (
+                  <div key={v.id} style={{
+                    display: "flex", alignItems: "center", gap: "10px", padding: "10px 12px",
+                    background: "#111", borderRadius: "10px", border: "1px solid #222", marginBottom: "6px",
+                  }}>
+                    <span style={{ fontSize: "12px", fontWeight: 800, color: "#444", width: "18px" }}>{i + 1}</span>
+                    {v.youtube_id && (
+                      <div style={{
+                        width: "48px", height: "27px", borderRadius: "4px", flexShrink: 0,
+                        backgroundImage: `url(https://img.youtube.com/vi/${v.youtube_id}/default.jpg)`,
+                        backgroundSize: "cover", backgroundPosition: "center",
+                      }} />
+                    )}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{
+                        fontSize: "12px", fontWeight: 600, color: "#ddd",
+                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                      }}>{v.title}</div>
+                      <div style={{ fontSize: "10px", color: "#666" }}>{v.channel_title} · {videoTypeLabel(v.video_type)}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* ── Podcasts ── */}
+            {episodes.length > 0 && (
+              <div style={{ marginBottom: "18px" }}>
+                <label style={{ display: "block", fontSize: "11px", fontWeight: 700, color: "#888", letterSpacing: "0.8px", marginBottom: "6px" }}>
+                  🎧 PODCASTS ({episodes.length})
+                </label>
+                {episodes.map((ep, i) => (
+                  <div key={ep.id} style={{
+                    display: "flex", alignItems: "center", gap: "10px", padding: "10px 12px",
+                    background: "#111", borderRadius: "10px", border: "1px solid #222", marginBottom: "6px",
+                  }}>
+                    <span style={{ fontSize: "12px", fontWeight: 800, color: "#444", width: "18px" }}>{i + 1}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{
+                        fontSize: "12px", fontWeight: 600, color: "#ddd",
+                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                      }}>{ep.title}</div>
+                      <div style={{ fontSize: "10px", color: "#666" }}>{ep.sources?.name || "Podcast"}{ep.duration ? ` · ${ep.duration}` : ""}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
         {/* PREVIEW */}
         {activePanel === "preview" && (
           <div className="nb-anim" style={{ padding: "12px" }}>
-            <div style={{ borderRadius: "12px", overflow: "hidden", border: "1px solid #2a3348", background: "#fff" }}>
+            <div style={{ borderRadius: "12px", overflow: "hidden", border: "1px solid #333", background: "#fff" }}>
               <iframe ref={previewRef} title="Newsletter preview" sandbox="allow-same-origin"
                 style={{ width: "100%", height: "500px", border: "none", display: "block" }} />
             </div>
@@ -504,13 +515,13 @@ export default function NewsletterBuilder({ articles, mediaItems = [], onClose, 
             {[
               { label: "Download HTML", desc: "Email-ready HTML file. Paste into your email tool's HTML editor.", icon: "📄", onClick: handleDownloadHtml },
               { label: "Save as PDF", desc: "Opens print dialog — choose 'Save as PDF'.", icon: "📑", onClick: handlePrintPdf },
-              { label: "PowerPoint", desc: "Coming in Phase 4", icon: "📊", disabled: true },
-              { label: "Word Document", desc: "Coming in Phase 4", icon: "📝", disabled: true },
+              { label: "PowerPoint", desc: "Coming soon", icon: "📊", disabled: true },
+              { label: "Word Document", desc: "Coming soon", icon: "📝", disabled: true },
             ].map((opt) => (
               <button key={opt.label} onClick={opt.disabled ? undefined : opt.onClick} style={{
                 width: "100%", display: "flex", alignItems: "center", gap: "14px",
                 padding: "14px 16px", marginBottom: "8px", borderRadius: "14px",
-                border: "1px solid #1f2937", background: "#111827", cursor: opt.disabled ? "default" : "pointer",
+                border: "1px solid #222", background: "#111", cursor: opt.disabled ? "default" : "pointer",
                 textAlign: "left", opacity: opt.disabled ? 0.4 : 1,
               }}>
                 <span style={{ fontSize: "22px" }}>{opt.icon}</span>
@@ -527,12 +538,13 @@ export default function NewsletterBuilder({ articles, mediaItems = [], onClose, 
             </div>
             {[
               { label: "Copy HTML to clipboard", desc: "Paste directly into your email tool's source editor.", icon: "📋", onClick: handleCopyHtml, highlight: true },
+              { label: "Email with attachment", desc: "Downloads the file then opens your email client.", icon: "✉️", onClick: handleEmailWithHtml },
             ].map((opt) => (
               <button key={opt.label} onClick={opt.onClick} style={{
                 width: "100%", display: "flex", alignItems: "center", gap: "14px",
                 padding: "14px 16px", marginBottom: "8px", borderRadius: "14px",
-                border: opt.highlight && copied ? "1px solid #00e5a0" : "1px solid #1f2937",
-                background: opt.highlight && copied ? "rgba(0,229,160,0.08)" : "#111827",
+                border: opt.highlight && copied ? "1px solid #00e5a0" : "1px solid #222",
+                background: opt.highlight && copied ? "rgba(0,229,160,0.08)" : "#111",
                 cursor: "pointer", textAlign: "left",
               }}>
                 <span style={{ fontSize: "22px" }}>{opt.icon}</span>
@@ -544,75 +556,6 @@ export default function NewsletterBuilder({ articles, mediaItems = [], onClose, 
                 </div>
               </button>
             ))}
-
-            {/* Email — improved two-step UX */}
-            <button onClick={handleEmailWithHtml} style={{
-              width: "100%", display: "flex", alignItems: "center", gap: "14px",
-              padding: "14px 16px", marginBottom: "8px", borderRadius: "14px",
-              border: emailStep > 0 ? "1px solid #00e5a0" : "1px solid #1f2937",
-              background: emailStep > 0 ? "rgba(0,229,160,0.05)" : "#111827",
-              cursor: "pointer", textAlign: "left",
-            }}>
-              <span style={{ fontSize: "22px" }}>✉️</span>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: "14px", fontWeight: 600, color: emailStep > 0 ? "#00e5a0" : "#eee" }}>
-                  {emailStep === 0 ? "Download & Draft Email" : emailStep === 1 ? "✓ File downloaded…" : "✓ Attach the downloaded file to your email"}
-                </div>
-                <div style={{ fontSize: "11px", color: "#888", marginTop: "2px" }}>
-                  {emailStep === 0 ? "Downloads HTML, then opens your email client" : "Attach the .html file from your downloads folder"}
-                </div>
-              </div>
-            </button>
-
-            {/* ── Send directly via Brevo ── */}
-            <div style={{ fontSize: "11px", fontWeight: 700, color: "#888", letterSpacing: "0.8px", margin: "24px 0 10px" }}>
-              SEND DIRECTLY
-            </div>
-            <div style={{ padding: "16px", background: "#111827", borderRadius: "14px", border: "1px solid #1f2937" }}>
-              <div style={{ marginBottom: "12px" }}>
-                <label style={{ display: "block", fontSize: "11px", fontWeight: 700, color: "#888", letterSpacing: "0.8px", marginBottom: "6px" }}>RECIPIENT EMAIL</label>
-                <input value={recipientEmail} onChange={(e) => setRecipientEmail(e.target.value)}
-                  placeholder="colleague@company.com"
-                  type="email"
-                  style={{ width: "100%", padding: "12px 14px", borderRadius: "12px", border: "1px solid #2a3348", background: "#080d1a", color: "#eee", fontSize: "14px", outline: "none", fontFamily: "'DM Sans', sans-serif" }}
-                  onFocus={(e) => e.target.style.borderColor = "#00e5a0"}
-                  onBlur={(e) => e.target.style.borderColor = "#2a3348"}
-                />
-              </div>
-              <button onClick={async () => {
-                if (!recipientEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail)) {
-                  onToast?.("Please enter a valid email address");
-                  return;
-                }
-                setSending(true);
-                try {
-                  await sendNewsletterEmail({
-                    to: recipientEmail,
-                    subject: title,
-                    htmlContent: html,
-                    senderName: senderName || undefined,
-                  });
-                  setSent(true);
-                  onToast?.(`Newsletter sent to ${recipientEmail}`);
-                  setTimeout(() => setSent(false), 4000);
-                } catch (err) {
-                  onToast?.(`Failed to send: ${err.message}`);
-                }
-                setSending(false);
-              }} disabled={sending || sent} style={{
-                width: "100%", padding: "14px", borderRadius: "12px", border: "none",
-                background: sent ? "rgba(0,229,160,0.15)" : "#00e5a0",
-                color: sent ? "#00e5a0" : "#000",
-                fontSize: "14px", fontWeight: 700,
-                opacity: sending ? 0.6 : 1,
-                transition: "all 0.2s",
-              }}>
-                {sending ? "Sending…" : sent ? "✓ Sent!" : "Send Newsletter"}
-              </button>
-              <p style={{ fontSize: "10px", color: "#6b7280", textAlign: "center", margin: "8px 0 0" }}>
-                Sends the newsletter directly via email — no attachment needed
-              </p>
-            </div>
           </div>
         )}
       </div>
