@@ -91,6 +91,28 @@ export async function fetchCategoryCounts() {
 }
 
 // ═══════════════════════════════════════════════
+//  USER PROFILE
+// ═══════════════════════════════════════════════
+
+/**
+ * Fetch the user's profile (company, job title, etc.) from the profiles table.
+ */
+export async function fetchUserProfile(userId) {
+  if (!userId) return null;
+  try {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("full_name, company, job_title")
+      .eq("id", userId)
+      .maybeSingle();
+    if (error || !data) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+// ═══════════════════════════════════════════════
 //  INTERACTION TRACKING — for personalisation
 // ═══════════════════════════════════════════════
 
