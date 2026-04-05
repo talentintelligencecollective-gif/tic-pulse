@@ -62,6 +62,7 @@ export default function NewsletterBuilder({ articles = [], videos = [], episodes
   const [companyName, setCompanyName] = useState("");
   const [brandLookupState, setBrandLookupState] = useState("idle"); // idle | searching | found | notfound
   const [brandData, setBrandData] = useState(null);
+  const [autoDetectedCompany, setAutoDetectedCompany] = useState(false); // true if company came from user profile
   const lookupTimerRef = useRef(null);
 
   // Prefs loaded flag
@@ -121,6 +122,11 @@ export default function NewsletterBuilder({ articles = [], videos = [], episodes
       const resolvedCompany = prefs?.companyName || profileCompany;
       setCompanyName(resolvedCompany);
 
+      // Track if company was auto-detected from profile
+      if (profileCompany && (!prefs?.companyName || prefs.companyName === profileCompany)) {
+        setAutoDetectedCompany(true);
+      }
+
       // Intro: saved pref > default
       setIntroText(prefs?.introText || DEFAULT_INTRO);
 
@@ -161,6 +167,7 @@ export default function NewsletterBuilder({ articles = [], videos = [], episodes
   // ─── Brand lookup with debounce (manual typing) ───
   const handleCompanyNameChange = useCallback((name) => {
     setCompanyName(name);
+    setAutoDetectedCompany(false); // User is manually changing
     clearTimeout(lookupTimerRef.current);
 
     if (!name || name.trim().length < 2) {
@@ -335,6 +342,25 @@ export default function NewsletterBuilder({ articles = [], videos = [], episodes
                 marginTop: "20px", padding: "16px", background: "#111",
                 borderRadius: "14px", border: "1px solid #333",
               }}>
+                {/* Auto-detection banner — shown when company came from profile */}
+                {autoDetectedCompany && brandLookupState === "found" && brandData && (
+                  <div style={{
+                    marginBottom: "16px", padding: "12px 14px", borderRadius: "10px",
+                    background: "linear-gradient(135deg, rgba(0,229,160,0.08), rgba(0,180,216,0.06))",
+                    border: "1px solid rgba(0,229,160,0.2)",
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+                      <span style={{ fontSize: "16px" }}>🏢</span>
+                      <span style={{ fontSize: "13px", fontWeight: 700, color: "#00e5a0" }}>
+                        {brandData.company_name} brand detected
+                      </span>
+                    </div>
+                    <div style={{ fontSize: "11px", color: "#888", lineHeight: 1.5 }}>
+                      We matched your company from your profile and applied {brandData.company_name}'s brand colours automatically. You can adjust them below.
+                    </div>
+                  </div>
+                )}
+
                 {/* Company Name Input */}
                 <div style={{ marginBottom: "16px" }}>
                   <label style={{ display: "block", fontSize: "11px", fontWeight: 700, color: "#888", letterSpacing: "0.8px", marginBottom: "6px" }}>
@@ -362,8 +388,8 @@ export default function NewsletterBuilder({ articles = [], videos = [], episodes
                     </div>
                   </div>
 
-                  {/* Brand match feedback */}
-                  {brandLookupState === "found" && brandData && (
+                  {/* Brand match feedback (manual search only) */}
+                  {!autoDetectedCompany && brandLookupState === "found" && brandData && (
                     <div style={{
                       marginTop: "8px", padding: "8px 12px", borderRadius: "8px",
                       background: "rgba(0,229,160,0.06)", border: "1px solid rgba(0,229,160,0.15)",
