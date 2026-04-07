@@ -233,7 +233,7 @@ export async function updateStreak(userId) {
 
 // ─── Newsletter & Brand Guidelines ───
 
-export async function loadUserPreferences(userId) {
+export async function loadNewsletterPrefs(userId) {
   if (!userId) return null;
   try {
     const { data, error } = await supabase
@@ -246,7 +246,7 @@ export async function loadUserPreferences(userId) {
   } catch { return null; }
 }
 
-export async function saveUserPreferences(userId, prefs) {
+export async function saveNewsletterPrefs(userId, prefs) {
   if (!userId) return;
   try {
     await supabase.from("user_engagement").upsert({
