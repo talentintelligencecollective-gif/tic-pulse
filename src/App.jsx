@@ -6,7 +6,7 @@ import ShareSheet from "./ShareSheet.jsx";
 import NewsletterBuilder from "./NewsletterBuilder.jsx";
 import Toast from "./Toast.jsx";
 import {
-  SearchIcon, CloseIcon, TrendingIcon, BookmarkIcon,
+  SearchIcon, CloseIcon, BookmarkIcon,
   FeedIcon, DiscoverIcon, PeopleIcon, NewsletterIcon,
 } from "./Icons.jsx";
 
@@ -119,9 +119,6 @@ function PulseApp({ session }) {
   const [bookmarkedIds, setBookmarkedIds] = useState(new Set());
   const [engagementLoaded, setEngagementLoaded] = useState(false);
 
-  // Dynamic trending tags
-  const [trendingTags, setTrendingTags] = useState([]);
-
   // Personalisation: sort mode + affinities
   const [sortMode, setSortMode] = useState("latest");
   const [affinities, setAffinities] = useState({});
@@ -182,42 +179,14 @@ function PulseApp({ session }) {
 
   useEffect(() => { loadArticles(); }, [loadArticles]);
 
-  // ─── Dynamic trending tags (from last 48h of articles) ───
-  useEffect(() => {
-    if (articles.length === 0) return;
-    const cutoff = Date.now() - 48 * 60 * 60 * 1000;
-    const tagCounts = {};
-
-    for (const a of articles) {
-      const pubDate = new Date(a.published_at || a.created_at).getTime();
-      if (pubDate < cutoff) continue;
-      for (const tag of (a.tags || [])) {
-        const clean = tag.replace(/^#/, "");
-        if (clean.length > 2) {
-          tagCounts[clean] = (tagCounts[clean] || 0) + 1;
-        }
-      }
-    }
-
-    const sorted = Object.entries(tagCounts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 6)
-      .map(([tag, count]) => ({ tag: `#${tag}`, count: String(count) }));
-
-    if (sorted.length === 0) {
-      setTrendingTags([]);
-    } else {
-      setTrendingTags(sorted);
-    }
-  }, [articles]);
-
   // ─── Client-side filtering + personalisation sorting ───
   const filteredArticles = useMemo(() => {
     const freshnessCutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
 
     const filtered = articles.filter((a) => {
-      const pubDate = new Date(a.created_at || a.published_at).getTime();
-      if (pubDate < freshnessCutoff) return false;
+      // Freshness: use created_at (fetch date) — Google News surfaces old articles
+      const fetchDate = new Date(a.created_at).getTime();
+      if (fetchDate < freshnessCutoff) return false;
 
       // Category filter
       if (activeCategory !== "All" && a.category !== activeCategory) return false;
@@ -239,8 +208,8 @@ function PulseApp({ session }) {
     if (sortMode === "foryou" && Object.keys(affinities).length > 0) {
       const maxAff = Math.max(...Object.values(affinities).map((a) => a.total), 1);
       return filtered.sort((a, b) => {
-        const recA = Math.max(0, 1 - (Date.now() - new Date(a.created_at || a.published_at).getTime()) / (7 * 86400000));
-        const recB = Math.max(0, 1 - (Date.now() - new Date(b.created_at || b.published_at).getTime()) / (7 * 86400000));
+        const recA = Math.max(0, 1 - (Date.now() - new Date(a.published_at || a.created_at).getTime()) / (7 * 86400000));
+        const recB = Math.max(0, 1 - (Date.now() - new Date(b.published_at || b.created_at).getTime()) / (7 * 86400000));
         const affA = (affinities[a.category]?.total || 0) / maxAff;
         const affB = (affinities[b.category]?.total || 0) / maxAff;
         return (recB * 0.6 + affB * 0.4) - (recA * 0.6 + affA * 0.4);
@@ -249,7 +218,7 @@ function PulseApp({ session }) {
 
     // Default "latest": pure chronological (newest first)
     return filtered.sort((a, b) =>
-      new Date(b.created_at || b.published_at) - new Date(a.created_at || a.published_at)
+      new Date(b.published_at || b.created_at) - new Date(a.published_at || a.created_at)
     );
   }, [articles, activeCategory, searchQuery, sortMode, affinities]);
 
@@ -376,11 +345,10 @@ function PulseApp({ session }) {
           <FeedView
             articles={filteredArticles} loading={loading} error={error} searchQuery={searchQuery}
             likedIds={likedIds} bookmarkedIds={bookmarkedIds} selectedIds={selectedIdSet}
-            trendingTags={trendingTags} user={session?.user} sortMode={sortMode}
+            user={session?.user} sortMode={sortMode}
             onLike={handleLike} onBookmark={handleBookmark} onShare={handleShare}
             onToggleSelect={handleToggleSelect}
             onClearFilters={() => { setActiveCategory("All"); setSearchQuery(""); setSearchOpen(false); }}
-            onSearchTag={(tag) => { setSearchQuery(tag); setSearchOpen(true); }}
             onRetry={loadArticles}
           />
         )}
@@ -556,7 +524,7 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
 //  FEED VIEW — with time grouping + sort mode
 // ═══════════════════════════════════════════════
 
-function FeedView({ articles, loading, error, searchQuery, likedIds, bookmarkedIds, selectedIds, trendingTags, user, sortMode, onLike, onBookmark, onShare, onToggleSelect, onClearFilters, onSearchTag, onRetry }) {
+function FeedView({ articles, loading, error, searchQuery, likedIds, bookmarkedIds, selectedIds, user, sortMode, onLike, onBookmark, onShare, onToggleSelect, onClearFilters, onRetry }) {
   const hasSelections = selectedIds.size > 0;
 
   // Group articles by time period for "latest" mode
@@ -575,7 +543,7 @@ function FeedView({ articles, loading, error, searchQuery, likedIds, bookmarkedI
     const thisWeek = [];
 
     for (const a of articles) {
-      const age = now - new Date(a.created_at || a.published_at).getTime();
+      const age = now - new Date(a.published_at || a.created_at).getTime();
       if (age < h24) today.push(a);
       else if (age < h48) yesterday.push(a);
       else thisWeek.push(a);
@@ -596,7 +564,6 @@ function FeedView({ articles, loading, error, searchQuery, likedIds, bookmarkedI
 
   return (
     <div style={{ padding: hasSelections ? "12px 12px 180px" : "12px 12px 110px" }}>
-      <TrendingTicker tags={trendingTags} onTagClick={onSearchTag} />
 
       {searchQuery && (
         <div style={{
@@ -1103,38 +1070,6 @@ function ListenView() {
           })}
         </div>
       )}
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════
-//  TRENDING TICKER — dynamic
-// ═══════════════════════════════════════════════
-
-function TrendingTicker({ tags, onTagClick }) {
-  if (!tags || tags.length === 0) return null;
-  return (
-    <div style={{
-      display: "flex", alignItems: "center", gap: "10px", padding: "10px 14px",
-      marginBottom: "14px", background: "rgba(255,255,255,0.015)",
-      borderRadius: "14px", border: "1px solid #1a1a1a",
-      overflowX: "auto", scrollbarWidth: "none",
-    }}>
-      <div style={{ display: "flex", alignItems: "center", gap: "5px", color: "#00e5a0", flexShrink: 0 }}>
-        <TrendingIcon />
-        <span style={{ fontSize: "10px", fontWeight: 800, letterSpacing: "1.2px" }}>TRENDING</span>
-      </div>
-      <div style={{ width: "1px", height: "14px", background: "#333", flexShrink: 0 }} />
-      {tags.map((t) => (
-        <button key={t.tag} onClick={() => onTagClick(t.tag.slice(1))} style={{
-          background: "none", border: "none", color: "#888",
-          fontSize: "11px", fontWeight: 600, whiteSpace: "nowrap",
-          padding: "3px 6px", borderRadius: "6px", transition: "all 0.2s",
-        }}
-          onMouseEnter={(e) => { e.currentTarget.style.color = "#00e5a0"; e.currentTarget.style.background = "rgba(0,229,160,0.08)"; }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = "#888"; e.currentTarget.style.background = "none"; }}
-        >{t.tag}</button>
-      ))}
     </div>
   );
 }
