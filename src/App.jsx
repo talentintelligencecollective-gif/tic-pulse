@@ -1,12 +1,12 @@
-import { useState, useEffect, useCallback, useRef, useMemo, Component } from "react";
-import { supabase, fetchArticles, incrementEngagement, trackInteraction, fetchUserAffinities, updateStreak, incrementStreakCounter, getStreakTier, getEarnedBadges, fetchUserProfile, updateUserProfile } from "./supabase.js";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { supabase, fetchArticles, incrementEngagement, trackInteraction, fetchUserAffinities } from "./supabase.js";
 import AuthPage from "./AuthPage.jsx";
 import ArticleCard from "./ArticleCard.jsx";
 import ShareSheet from "./ShareSheet.jsx";
 import NewsletterBuilder from "./NewsletterBuilder.jsx";
 import Toast from "./Toast.jsx";
 import {
-  SearchIcon, CloseIcon, BookmarkIcon,
+  SearchIcon, CloseIcon, TrendingIcon, BookmarkIcon,
   FeedIcon, DiscoverIcon, PeopleIcon, NewsletterIcon,
 } from "./Icons.jsx";
 
@@ -63,32 +63,6 @@ const fmtViews = (n) => !n ? "0" : n >= 1e6 ? `${(n/1e6).toFixed(1)}M` : n >= 1e
 const videoTypeColor = (t) => t === "podcast" ? "#00e5a0" : t === "event" ? "#f59e0b" : t === "panel" ? "#a855f7" : t === "short" ? "#00b4d8" : "#888";
 const videoTypeLabel = (t) => ({ podcast: "Podcast", event: "Event", panel: "Panel", short: "Short", video: "Video" }[t] || "Video");
 
-// ─── Error Boundary — prevents white-screen crashes ───
-
-class ErrorBoundary extends Component {
-  constructor(props) { super(props); this.state = { hasError: false }; }
-  static getDerivedStateFromError() { return { hasError: true }; }
-  componentDidCatch(error, info) { console.error("TIC Pulse crash:", error, info); }
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div style={{ minHeight: "100vh", background: "#000", display: "flex", alignItems: "center", justifyContent: "center", padding: "24px" }}>
-          <div style={{ textAlign: "center", maxWidth: "320px" }}>
-            <div style={{ fontSize: "40px", marginBottom: "16px", opacity: 0.5 }}>⚡</div>
-            <h2 style={{ fontSize: "18px", fontWeight: 700, color: "#fff", margin: "0 0 8px", fontFamily: "Georgia, serif" }}>Something went wrong</h2>
-            <p style={{ fontSize: "13px", color: "#888", lineHeight: 1.5, margin: "0 0 20px" }}>TIC Pulse hit an unexpected error. Try refreshing.</p>
-            <button onClick={() => { this.setState({ hasError: false }); window.location.reload(); }} style={{
-              background: "#00e5a0", border: "none", borderRadius: "12px", color: "#000",
-              padding: "10px 24px", fontSize: "14px", fontWeight: 700, cursor: "pointer",
-            }}>Refresh</button>
-          </div>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
-
 // ═══════════════════════════════════════════════
 //  APP (auth wrapper)
 // ═══════════════════════════════════════════════
@@ -116,11 +90,11 @@ export default function App() {
   }
 
   if (!session) return <AuthPage onAuth={(s) => setSession(s)} />;
-  return <ErrorBoundary><PulseApp session={session} /></ErrorBoundary>;
+  return <PulseApp session={session} />;
 }
 
 // ═══════════════════════════════════════════════
-//  PULSE APP — Phase 2: server-side engagement
+//  PULSE APP — with personalisation + sort toggle
 // ═══════════════════════════════════════════════
 
 function PulseApp({ session }) {
@@ -137,48 +111,25 @@ function PulseApp({ session }) {
   const [shareTarget, setShareTarget] = useState(null);
   const [toast, setToast] = useState({ msg: "", show: false });
 
-  // Newsletter selections — articles, videos, and episodes
   const [selectedIds, setSelectedIds] = useState([]);
-  const [selectedVideoIds, setSelectedVideoIds] = useState([]);
-  const [selectedEpisodeIds, setSelectedEpisodeIds] = useState([]);
   const [showNewsletter, setShowNewsletter] = useState(false);
-
-  // Profile editor
-  const [showProfile, setShowProfile] = useState(false);
-
-  // Cached multimedia data for the newsletter builder
-  const [cachedVideos, setCachedVideos] = useState([]);
-  const [cachedEpisodes, setCachedEpisodes] = useState([]);
 
   // Server-side engagement (replaces localStorage)
   const [likedIds, setLikedIds] = useState(new Set());
   const [bookmarkedIds, setBookmarkedIds] = useState(new Set());
   const [engagementLoaded, setEngagementLoaded] = useState(false);
 
-  // Personalisation
+  // Dynamic trending tags
+  const [trendingTags, setTrendingTags] = useState([]);
+
+  // Personalisation: sort mode + affinities
   const [sortMode, setSortMode] = useState("latest");
   const [affinities, setAffinities] = useState({});
-
-  // Streaks & badges
-  const [streakData, setStreakData] = useState(null);
-
-  // Search debounce
-  const [debouncedSearch, setDebouncedSearch] = useState("");
 
   const likedIdsRef = useRef(likedIds);
   useEffect(() => { likedIdsRef.current = likedIds; }, [likedIds]);
 
-  // Ref to avoid stale closures in handlers
-  const articlesRef = useRef(articles);
-  useEffect(() => { articlesRef.current = articles; }, [articles]);
-
   const searchInputRef = useRef(null);
-
-  // Debounce search input by 250ms
-  useEffect(() => {
-    const timer = setTimeout(() => setDebouncedSearch(searchQuery), 250);
-    return () => clearTimeout(timer);
-  }, [searchQuery]);
 
   // ─── Load engagement from Supabase ───
   useEffect(() => {
@@ -214,12 +165,6 @@ function PulseApp({ session }) {
     fetchUserAffinities(userId).then(setAffinities);
   }, [userId]);
 
-  // ─── Update streak on app open ───
-  useEffect(() => {
-    if (!userId) return;
-    updateStreak(userId).then(setStreakData);
-  }, [userId]);
-
   // ─── Data Loading ───
   const loadArticles = useCallback(async () => {
     setLoading(true);
@@ -237,18 +182,49 @@ function PulseApp({ session }) {
 
   useEffect(() => { loadArticles(); }, [loadArticles]);
 
-  // ─── Client-side filtering (7-day freshness) + personalisation ───
+  // ─── Dynamic trending tags (from last 48h of articles) ───
+  useEffect(() => {
+    if (articles.length === 0) return;
+    const cutoff = Date.now() - 48 * 60 * 60 * 1000;
+    const tagCounts = {};
+
+    for (const a of articles) {
+      const pubDate = new Date(a.published_at || a.created_at).getTime();
+      if (pubDate < cutoff) continue;
+      for (const tag of (a.tags || [])) {
+        const clean = tag.replace(/^#/, "");
+        if (clean.length > 2) {
+          tagCounts[clean] = (tagCounts[clean] || 0) + 1;
+        }
+      }
+    }
+
+    const sorted = Object.entries(tagCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([tag, count]) => ({ tag: `#${tag}`, count: String(count) }));
+
+    if (sorted.length === 0) {
+      setTrendingTags([]);
+    } else {
+      setTrendingTags(sorted);
+    }
+  }, [articles]);
+
+  // ─── Client-side filtering + personalisation sorting ───
   const filteredArticles = useMemo(() => {
     const freshnessCutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+
     const filtered = articles.filter((a) => {
-      // Use created_at (when we fetched it) not published_at (original pub date)
-      // Google News surfaces old articles — filtering by published_at hides valid content
-      const fetchDate = new Date(a.created_at || a.published_at).getTime();
-      if (fetchDate < freshnessCutoff) return false;
-      const matchesCategory = activeCategory === "All" || a.category === activeCategory;
-      if (!matchesCategory) return false;
-      if (debouncedSearch) {
-        const q = debouncedSearch.toLowerCase();
+      const pubDate = new Date(a.created_at || a.published_at).getTime();
+      if (pubDate < freshnessCutoff) return false;
+
+      // Category filter
+      if (activeCategory !== "All" && a.category !== activeCategory) return false;
+
+      // Search filter
+      if (searchQuery) {
+        const q = searchQuery.toLowerCase();
         return (
           (a.title || "").toLowerCase().includes(q) ||
           (a.tldr || "").toLowerCase().includes(q) ||
@@ -259,20 +235,23 @@ function PulseApp({ session }) {
       return true;
     });
 
-    // Sort: "latest" = chronological, "foryou" = affinity-boosted
+    // Sort: "foryou" blends recency (60%) with category affinity (40%)
     if (sortMode === "foryou" && Object.keys(affinities).length > 0) {
       const maxAff = Math.max(...Object.values(affinities).map((a) => a.total), 1);
       return filtered.sort((a, b) => {
-        const recA = 1 - (Date.now() - new Date(a.published_at || a.created_at).getTime()) / (7 * 86400000);
-        const recB = 1 - (Date.now() - new Date(b.published_at || b.created_at).getTime()) / (7 * 86400000);
+        const recA = Math.max(0, 1 - (Date.now() - new Date(a.created_at || a.published_at).getTime()) / (7 * 86400000));
+        const recB = Math.max(0, 1 - (Date.now() - new Date(b.created_at || b.published_at).getTime()) / (7 * 86400000));
         const affA = (affinities[a.category]?.total || 0) / maxAff;
         const affB = (affinities[b.category]?.total || 0) / maxAff;
-        return (Math.max(0, recB) * 0.6 + affB * 0.4) - (Math.max(0, recA) * 0.6 + affA * 0.4);
+        return (recB * 0.6 + affB * 0.4) - (recA * 0.6 + affA * 0.4);
       });
     }
 
-    return filtered.sort((a, b) => new Date(b.published_at || b.created_at) - new Date(a.published_at || a.created_at));
-  }, [articles, activeCategory, debouncedSearch, sortMode, affinities]);
+    // Default "latest": pure chronological (newest first)
+    return filtered.sort((a, b) =>
+      new Date(b.created_at || b.published_at) - new Date(a.created_at || a.published_at)
+    );
+  }, [articles, activeCategory, searchQuery, sortMode, affinities]);
 
   useEffect(() => {
     if (searchOpen && searchInputRef.current) searchInputRef.current.focus();
@@ -299,15 +278,6 @@ function PulseApp({ session }) {
       return { ...a, like_count: (a.like_count || 0) + (wasLiked ? -1 : 1) };
     }));
 
-    // Track for personalisation (only on like, not unlike)
-    if (!wasLiked) {
-      const article = articlesRef.current.find((a) => a.id === articleId);
-      if (article) trackInteraction(userId, articleId, "like", article);
-      incrementStreakCounter(userId, "total_likes", 1);
-    } else {
-      incrementStreakCounter(userId, "total_likes", -1);
-    }
-
     // Persist to Supabase
     incrementEngagement(articleId, "like_count", wasLiked ? -1 : 1);
     supabase.from("user_engagement").upsert({
@@ -318,7 +288,13 @@ function PulseApp({ session }) {
     }, { onConflict: "user_id,article_id" }).then(({ error }) => {
       if (error) console.error("Like sync error:", error);
     });
-  }, [userId]);
+
+    // Track interaction for personalisation (only on like, not unlike)
+    if (!wasLiked) {
+      const article = articles.find(a => a.id === articleId);
+      trackInteraction(userId, articleId, "like", article);
+    }
+  }, [userId, articles]);
 
   // ─── Server-side Bookmark Handler ───
   const handleBookmark = useCallback((articleId) => {
@@ -330,14 +306,7 @@ function PulseApp({ session }) {
       return next;
     });
 
-    if (!wasBookmarked) {
-      showToast("Saved to bookmarks");
-      const article = articlesRef.current.find((a) => a.id === articleId);
-      if (article) trackInteraction(userId, articleId, "bookmark", article);
-      incrementStreakCounter(userId, "total_bookmarks", 1);
-    } else {
-      incrementStreakCounter(userId, "total_bookmarks", -1);
-    }
+    if (!wasBookmarked) showToast("Saved to bookmarks");
 
     supabase.from("user_engagement").upsert({
       user_id: userId,
@@ -347,15 +316,21 @@ function PulseApp({ session }) {
     }, { onConflict: "user_id,article_id" }).then(({ error }) => {
       if (error) console.error("Bookmark sync error:", error);
     });
-  }, [userId, bookmarkedIds, showToast]);
+
+    // Track interaction for personalisation (only on bookmark, not unbookmark)
+    if (!wasBookmarked) {
+      const article = articles.find(a => a.id === articleId);
+      trackInteraction(userId, articleId, "bookmark", article);
+    }
+  }, [userId, bookmarkedIds, showToast, articles]);
 
   const handleShare = useCallback((article) => {
     setShareTarget(article);
     incrementEngagement(article.id, "share_count", 1);
-    incrementStreakCounter(userId, "total_shares", 1);
+    trackInteraction(userId, article.id, "share", article);
   }, [userId]);
 
-  // ─── Curate Mode (Articles) ───
+  // ─── Curate Mode ───
   const handleToggleSelect = useCallback((articleId) => {
     setSelectedIds((prev) => {
       if (prev.includes(articleId)) return prev.filter((id) => id !== articleId);
@@ -363,57 +338,17 @@ function PulseApp({ session }) {
     });
   }, []);
 
-  // ─── Curate Mode (Videos) ───
-  const handleToggleSelectVideo = useCallback((videoId) => {
-    setSelectedVideoIds((prev) => {
-      if (prev.includes(videoId)) return prev.filter((id) => id !== videoId);
-      return [...prev, videoId];
-    });
-  }, []);
-
-  // ─── Curate Mode (Episodes) ───
-  const handleToggleSelectEpisode = useCallback((episodeId) => {
-    setSelectedEpisodeIds((prev) => {
-      if (prev.includes(episodeId)) return prev.filter((id) => id !== episodeId);
-      return [...prev, episodeId];
-    });
-  }, []);
-
-  // ─── Open Newsletter Builder ───
-  const totalSelected = selectedIds.length + selectedVideoIds.length + selectedEpisodeIds.length;
-
   const handleOpenNewsletter = useCallback(() => {
-    if (totalSelected === 0) return;
+    if (selectedIds.length === 0) return;
     setShowNewsletter(true);
-  }, [totalSelected]);
+  }, [selectedIds]);
 
-  const handleClearAll = useCallback(() => {
-    setSelectedIds([]);
-    setSelectedVideoIds([]);
-    setSelectedEpisodeIds([]);
-  }, []);
-
-  // Resolve selected articles for the newsletter
   const selectedArticles = useMemo(() => {
     const articleMap = new Map(articles.map((a) => [a.id, a]));
     return selectedIds.map((id) => articleMap.get(id)).filter(Boolean);
   }, [articles, selectedIds]);
 
-  // Resolve selected videos from cached data
-  const selectedVideos = useMemo(() => {
-    const videoMap = new Map(cachedVideos.map((v) => [v.id, v]));
-    return selectedVideoIds.map((id) => videoMap.get(id)).filter(Boolean);
-  }, [cachedVideos, selectedVideoIds]);
-
-  // Resolve selected episodes from cached data
-  const selectedEpisodes = useMemo(() => {
-    const epMap = new Map(cachedEpisodes.map((e) => [e.id, e]));
-    return selectedEpisodeIds.map((id) => epMap.get(id)).filter(Boolean);
-  }, [cachedEpisodes, selectedEpisodeIds]);
-
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
-  const selectedVideoIdSet = useMemo(() => new Set(selectedVideoIds), [selectedVideoIds]);
-  const selectedEpisodeIdSet = useMemo(() => new Set(selectedEpisodeIds), [selectedEpisodeIds]);
 
   // ─── Render ───
   return (
@@ -428,12 +363,12 @@ function PulseApp({ session }) {
       <Header
         searchOpen={searchOpen} searchQuery={searchQuery} activeCategory={activeCategory}
         searchInputRef={searchInputRef} user={session?.user} activeTab={activeTab}
-        streakData={streakData}
+        sortMode={sortMode}
         onLogout={async () => { await supabase.auth.signOut(); }}
-        onEditProfile={() => setShowProfile(true)}
         onToggleSearch={() => { setSearchOpen(!searchOpen); if (searchOpen) setSearchQuery(""); }}
         onSearchChange={setSearchQuery}
         onCategoryChange={(cat) => { setActiveCategory(cat); setSearchQuery(""); setSearchOpen(false); }}
+        onSortModeChange={setSortMode}
       />
 
       <main style={{ position: "relative", zIndex: 1 }}>
@@ -441,27 +376,16 @@ function PulseApp({ session }) {
           <FeedView
             articles={filteredArticles} loading={loading} error={error} searchQuery={searchQuery}
             likedIds={likedIds} bookmarkedIds={bookmarkedIds} selectedIds={selectedIdSet}
-            user={session?.user} sortMode={sortMode} onSortModeChange={setSortMode}
+            trendingTags={trendingTags} user={session?.user} sortMode={sortMode}
             onLike={handleLike} onBookmark={handleBookmark} onShare={handleShare}
             onToggleSelect={handleToggleSelect}
             onClearFilters={() => { setActiveCategory("All"); setSearchQuery(""); setSearchOpen(false); }}
+            onSearchTag={(tag) => { setSearchQuery(tag); setSearchOpen(true); }}
             onRetry={loadArticles}
           />
         )}
-        {activeTab === "watch" && (
-          <WatchView
-            selectedVideoIds={selectedVideoIdSet}
-            onToggleSelectVideo={handleToggleSelectVideo}
-            onCacheVideos={setCachedVideos}
-          />
-        )}
-        {activeTab === "listen" && (
-          <ListenView
-            selectedEpisodeIds={selectedEpisodeIdSet}
-            onToggleSelectEpisode={handleToggleSelectEpisode}
-            onCacheEpisodes={setCachedEpisodes}
-          />
-        )}
+        {activeTab === "watch" && <WatchView />}
+        {activeTab === "listen" && <ListenView />}
         {activeTab === "discover" && <DiscoverView />}
         {activeTab === "saved" && (
           <SavedView articles={articles} likedIds={likedIds} bookmarkedIds={bookmarkedIds}
@@ -471,8 +395,7 @@ function PulseApp({ session }) {
 
       <BottomNav activeTab={activeTab} onTabChange={setActiveTab} />
 
-      {/* ── Floating Curation Bar ── */}
-      {totalSelected > 0 && (
+      {selectedIds.length > 0 && (
         <div style={{
           position: "fixed", bottom: "72px", left: "50%", transform: "translateX(-50%)",
           width: "calc(100% - 24px)", maxWidth: "456px", zIndex: 150,
@@ -484,19 +407,11 @@ function PulseApp({ session }) {
             boxShadow: "0 8px 40px rgba(0,0,0,0.6)",
           }}>
             <div>
-              <div style={{ fontSize: "14px", fontWeight: 700, color: "#fff" }}>
-                {totalSelected} item{totalSelected !== 1 ? "s" : ""} selected
-              </div>
-              <div style={{ fontSize: "11px", color: "#999", marginTop: "1px" }}>
-                {[
-                  selectedIds.length > 0 ? `${selectedIds.length} article${selectedIds.length !== 1 ? "s" : ""}` : null,
-                  selectedVideoIds.length > 0 ? `${selectedVideoIds.length} video${selectedVideoIds.length !== 1 ? "s" : ""}` : null,
-                  selectedEpisodeIds.length > 0 ? `${selectedEpisodeIds.length} episode${selectedEpisodeIds.length !== 1 ? "s" : ""}` : null,
-                ].filter(Boolean).join(" · ")}
-              </div>
+              <div style={{ fontSize: "14px", fontWeight: 700, color: "#fff" }}>{selectedIds.length} article{selectedIds.length !== 1 ? "s" : ""} selected</div>
+              <div style={{ fontSize: "11px", color: "#999", marginTop: "1px" }}>Ready to build your briefing</div>
             </div>
             <div style={{ display: "flex", gap: "8px" }}>
-              <button onClick={handleClearAll} style={{ background: "none", border: "1px solid #444", borderRadius: "12px", color: "#ccc", padding: "10px 14px", fontSize: "12px", fontWeight: 600 }}>Clear</button>
+              <button onClick={() => setSelectedIds([])} style={{ background: "none", border: "1px solid #444", borderRadius: "12px", color: "#ccc", padding: "10px 14px", fontSize: "12px", fontWeight: 600 }}>Clear</button>
               <button onClick={handleOpenNewsletter} style={{ background: "#00e5a0", border: "none", borderRadius: "12px", color: "#000", padding: "10px 18px", fontSize: "13px", fontWeight: 700, display: "flex", alignItems: "center", gap: "6px" }}>
                 <NewsletterIcon size={16} /> Build
               </button>
@@ -507,110 +422,88 @@ function PulseApp({ session }) {
 
       <ShareSheet article={shareTarget} onClose={() => setShareTarget(null)} onToast={showToast} />
       <Toast message={toast.msg} visible={toast.show} />
-      {showProfile && (
-        <ProfileEditor
-          userId={userId}
-          user={session?.user}
-          streakData={streakData}
-          onClose={() => setShowProfile(false)}
-          onToast={showToast}
-        />
-      )}
-      {showNewsletter && (
-        <NewsletterBuilder
-          articles={selectedArticles}
-          videos={selectedVideos}
-          episodes={selectedEpisodes}
-          userId={userId}
-          onClose={() => setShowNewsletter(false)}
-          onToast={showToast}
-        />
-      )}
+      {showNewsletter && <NewsletterBuilder articles={selectedArticles} onClose={() => setShowNewsletter(false)} onToast={showToast} />}
     </div>
   );
 }
 
 // ═══════════════════════════════════════════════
-//  HEADER
+//  HEADER — with Latest / For You toggle
 // ═══════════════════════════════════════════════
 
-function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user, activeTab, streakData, onLogout, onEditProfile, onToggleSearch, onSearchChange, onCategoryChange }) {
+function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user, activeTab, sortMode, onLogout, onToggleSearch, onSearchChange, onCategoryChange, onSortModeChange }) {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userInitials = user?.user_metadata?.full_name
     ? user.user_metadata.full_name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)
     : (user?.email?.[0] || "?").toUpperCase();
 
   const showCategories = activeTab === "feed";
-  const streakTier = streakData ? getStreakTier(streakData.current_streak) : null;
 
   return (
     <header style={{ position: "sticky", top: 0, zIndex: 100, background: "#000", borderBottom: "1px solid #222" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px 8px" }}>
+      <div style={{ padding: "10px 16px 0", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <div style={{
-            width: "30px", height: "30px", borderRadius: "10px",
-            background: "linear-gradient(135deg, #00E5B8, #00b4d8)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: "10px", fontWeight: 800, color: "#000",
-          }}>TIC</div>
-          <span style={{ fontSize: "20px", fontWeight: 700, color: "#fff", letterSpacing: "-0.5px" }}>Pulse</span>
-        </div>
-
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          {/* Streak badge (compact) */}
-          {streakTier && streakData?.current_streak >= 3 && (
-            <div style={{
-              display: "flex", alignItems: "center", gap: "4px", padding: "4px 10px",
-              borderRadius: "12px", background: `${streakTier.color}15`,
-              border: `1px solid ${streakTier.color}30`,
-            }}>
-              <span style={{ fontSize: "12px" }}>{streakTier.icon}</span>
-              <span style={{ fontSize: "11px", fontWeight: 700, color: streakTier.color }}>{streakData.current_streak}</span>
+          <img src="/tic-head.png" alt="TIC" style={{ width: "34px", height: "34px", objectFit: "contain" }} />
+          <div>
+            <div style={{ display: "flex", alignItems: "baseline", gap: "6px" }}>
+              <h1 style={{ fontSize: "22px", fontWeight: 800, margin: 0, fontFamily: "Georgia, serif", color: "#fff", letterSpacing: "-0.5px" }}>Pulse</h1>
+              <div style={{ display: "flex", alignItems: "center", gap: "4px", padding: "2px 7px", borderRadius: "6px", background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.15)" }}>
+                <div style={{ width: "5px", height: "5px", borderRadius: "50%", background: "#00e5a0", animation: "liveDot 2s ease infinite" }} />
+                <span style={{ fontSize: "9px", fontWeight: 800, color: "#00e5a0", letterSpacing: "1px" }}>LIVE</span>
+              </div>
             </div>
-          )}
-
-          <button onClick={onToggleSearch} aria-label={searchOpen ? "Close search" : "Search"}
-            style={{ width: "34px", height: "34px", borderRadius: "50%", border: "none", background: searchOpen ? "rgba(0,229,160,0.12)" : "rgba(255,255,255,0.05)", display: "flex", alignItems: "center", justifyContent: "center", color: searchOpen ? "#00e5a0" : "#999" }}>
-            {searchOpen ? <CloseIcon size={18} /> : <SearchIcon size={18} />}
+            <div style={{ fontSize: "9px", fontWeight: 700, color: "#888", letterSpacing: "2px", marginTop: "-1px" }}>TALENT INTELLIGENCE COLLECTIVE</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+          <button onClick={onToggleSearch} aria-label={searchOpen ? "Close search" : "Open search"} style={{
+            background: searchOpen ? "rgba(0,229,160,0.08)" : "none", border: "none",
+            color: searchOpen ? "#00e5a0" : "#888",
+            padding: "8px", borderRadius: "12px", display: "flex", alignItems: "center", transition: "all 0.2s",
+          }}>
+            {searchOpen ? <CloseIcon size={18} /> : <SearchIcon />}
           </button>
-
           <div style={{ position: "relative" }}>
-            <button onClick={() => setShowUserMenu(!showUserMenu)} style={{
+            <button onClick={() => setShowUserMenu(!showUserMenu)} aria-label="Account menu" style={{
               width: "32px", height: "32px", borderRadius: "50%",
-              background: "linear-gradient(135deg, #00E5B8, #00b4d8)",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              fontSize: "11px", fontWeight: 800, color: "#000", border: "none",
+              background: "linear-gradient(135deg, #00e5a0, #00b4d8)",
+              border: "none", display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: "11px", fontWeight: 800, color: "#000", cursor: "pointer", marginLeft: "2px",
             }}>{userInitials}</button>
             {showUserMenu && (
-              <div style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", background: "#111", borderRadius: "14px", border: "1px solid #333", padding: "4px", minWidth: "200px", boxShadow: "0 8px 40px rgba(0,0,0,0.5)", zIndex: 200 }}>
-                <div style={{ padding: "8px 12px", fontSize: "12px", color: "#666", borderBottom: "1px solid #222" }}>{user?.email}</div>
-                {/* Streak info in menu */}
-                {streakData && (
-                  <div style={{ padding: "10px 12px", borderBottom: "1px solid #222" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "4px" }}>
-                      <span style={{ fontSize: "14px" }}>{streakTier?.icon}</span>
-                      <span style={{ fontSize: "13px", fontWeight: 700, color: streakTier?.color }}>{streakData.current_streak}-day streak</span>
-                    </div>
-                    <div style={{ fontSize: "10px", color: "#666" }}>
-                      {streakTier?.label} · Best: {streakData.longest_streak} days · {streakData.total_active_days} total
-                    </div>
+              <>
+                <div style={{ position: "fixed", inset: 0, zIndex: 200 }} onClick={() => setShowUserMenu(false)} />
+                <div style={{
+                  position: "absolute", top: "40px", right: 0,
+                  background: "#1a1a1e", border: "1px solid #444",
+                  borderRadius: "14px", padding: "8px", minWidth: "180px", zIndex: 201,
+                  boxShadow: "0 8px 32px rgba(0,0,0,0.5)", animation: "fadeSlide 0.15s ease",
+                }}>
+                  <div style={{ padding: "10px 12px", borderBottom: "1px solid #333" }}>
+                    <div style={{ fontSize: "13px", fontWeight: 600, color: "#eee" }}>{user?.user_metadata?.full_name || "User"}</div>
+                    <div style={{ fontSize: "11px", color: "#888", marginTop: "2px" }}>{user?.email}</div>
                   </div>
-                )}
-                <button onClick={() => { setShowUserMenu(false); onEditProfile(); }} style={{ width: "100%", padding: "10px 12px", background: "none", border: "none", color: "#ccc", fontSize: "13px", fontWeight: 600, textAlign: "left", borderRadius: "10px", borderBottom: "1px solid #222" }}>Edit profile</button>
-                <button onClick={() => { setShowUserMenu(false); onLogout(); }} style={{ width: "100%", padding: "10px 12px", background: "none", border: "none", color: "#ff3b5c", fontSize: "13px", fontWeight: 600, textAlign: "left", borderRadius: "10px" }}>Sign out</button>
-              </div>
+                  <button onClick={() => { setShowUserMenu(false); onLogout(); }} style={{
+                    width: "100%", padding: "10px 12px", background: "none", border: "none",
+                    borderRadius: "8px", color: "#ff3b5c", fontSize: "13px", fontWeight: 600,
+                    textAlign: "left", cursor: "pointer", marginTop: "4px", transition: "background 0.2s",
+                  }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = "rgba(255,59,92,0.08)"}
+                    onMouseLeave={(e) => e.currentTarget.style.background = "none"}
+                  >Log out</button>
+                </div>
+              </>
             )}
           </div>
         </div>
       </div>
 
       {searchOpen && (
-        <div style={{ padding: "0 16px 10px" }}>
+        <div style={{ padding: "10px 16px 0", animation: "fadeSlide 0.2s ease" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "10px", background: "#111", borderRadius: "14px", padding: "0 14px", border: "1px solid #333" }}>
-            <SearchIcon size={16} color="#666" />
+            <SearchIcon size={16} />
             <input ref={searchInputRef} value={searchQuery} onChange={(e) => onSearchChange(e.target.value)}
-              placeholder="Search articles by topic, keyword, tag…"
-              style={{ flex: 1, background: "none", border: "none", color: "#eee", padding: "11px 0", fontSize: "14px", outline: "none", fontFamily: "inherit" }} />
+              placeholder="Search articles, topics, tags..." style={{ flex: 1, background: "none", border: "none", color: "#eee", padding: "11px 0", fontSize: "14px", outline: "none" }} />
             {searchQuery && (
               <button onClick={() => onSearchChange("")} style={{ background: "rgba(255,255,255,0.08)", border: "none", color: "#888", width: "20px", height: "20px", borderRadius: "50%", fontSize: "12px", display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
             )}
@@ -619,46 +512,91 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
       )}
 
       {showCategories && (
-        <div style={{ display: "flex", gap: "6px", padding: "0 16px 10px", overflowX: "auto", scrollbarWidth: "none" }}>
-          {CATEGORIES.map((cat) => {
-            const isActive = activeCategory === cat;
-            const color = cat === "All" ? "#00e5a0" : (CAT_COLORS[cat] || "#888");
-            return (
-              <button key={cat} onClick={() => onCategoryChange(cat)} style={{
-                padding: "5px 14px", borderRadius: "20px", whiteSpace: "nowrap",
-                fontSize: "11px", fontWeight: 700,
-                background: isActive ? `${color}18` : "transparent",
-                color: isActive ? color : "#888",
-                border: `1px solid ${isActive ? color + "40" : "#222"}`,
-                transition: "all 0.2s",
-              }}>{cat}</button>
-            );
-          })}
-        </div>
+        <>
+          {/* Sort toggle + category pills */}
+          <div style={{ display: "flex", alignItems: "center", gap: "7px", padding: "10px 16px 0", overflowX: "auto", scrollbarWidth: "none" }}>
+            {/* Latest / For You toggle */}
+            <div style={{ display: "flex", background: "#111", borderRadius: "20px", padding: "2px", flexShrink: 0, border: "1px solid #222" }}>
+              {[{ key: "latest", label: "Latest" }, { key: "foryou", label: "For You" }].map(({ key, label }) => (
+                <button key={key} onClick={() => onSortModeChange(key)} style={{
+                  padding: "4px 12px", borderRadius: "18px", fontSize: "10px", fontWeight: 700,
+                  border: "none", transition: "all 0.2s",
+                  background: sortMode === key ? "#00e5a0" : "transparent",
+                  color: sortMode === key ? "#000" : "#666",
+                  letterSpacing: "0.3px",
+                }}>{label}</button>
+              ))}
+            </div>
+            <div style={{ width: "1px", height: "16px", background: "#333", flexShrink: 0 }} />
+            {/* Category pills */}
+            {CATEGORIES.map((cat) => {
+              const isActive = activeCategory === cat;
+              const color = cat === "All" ? "#00e5a0" : (CAT_COLORS[cat] || "#00e5a0");
+              return (
+                <button key={cat} onClick={() => onCategoryChange(cat)} style={{
+                  padding: "5px 14px", borderRadius: "20px", whiteSpace: "nowrap",
+                  fontSize: "11px", fontWeight: 700, letterSpacing: "0.3px",
+                  border: isActive ? `1px solid ${color}40` : "1px solid #333",
+                  background: isActive ? `${color}12` : "#111",
+                  color: isActive ? color : "#999",
+                  transition: "all 0.25s ease",
+                }}>{cat}</button>
+              );
+            })}
+          </div>
+          <div style={{ height: "10px" }} />
+        </>
       )}
+      {!showCategories && !searchOpen && <div style={{ height: "12px" }} />}
     </header>
   );
 }
 
 // ═══════════════════════════════════════════════
-//  FEED VIEW — now with dynamic trending + user prop
+//  FEED VIEW — with time grouping + sort mode
 // ═══════════════════════════════════════════════
 
-function FeedView({ articles, loading, error, searchQuery, likedIds, bookmarkedIds, selectedIds, user, sortMode, onSortModeChange, onLike, onBookmark, onShare, onToggleSelect, onClearFilters, onRetry }) {
+function FeedView({ articles, loading, error, searchQuery, likedIds, bookmarkedIds, selectedIds, trendingTags, user, sortMode, onLike, onBookmark, onShare, onToggleSelect, onClearFilters, onSearchTag, onRetry }) {
   const hasSelections = selectedIds.size > 0;
+
+  // Group articles by time period for "latest" mode
+  const groupedArticles = useMemo(() => {
+    if (sortMode !== "latest" || searchQuery) {
+      // For You mode or search: flat list, no grouping
+      return [{ label: null, articles }];
+    }
+
+    const now = Date.now();
+    const h24 = 24 * 60 * 60 * 1000;
+    const h48 = 48 * 60 * 60 * 1000;
+
+    const today = [];
+    const yesterday = [];
+    const thisWeek = [];
+
+    for (const a of articles) {
+      const age = now - new Date(a.created_at || a.published_at).getTime();
+      if (age < h24) today.push(a);
+      else if (age < h48) yesterday.push(a);
+      else thisWeek.push(a);
+    }
+
+    const groups = [];
+    if (today.length > 0) groups.push({ label: "Today", articles: today });
+    if (yesterday.length > 0) groups.push({ label: "Yesterday", articles: yesterday });
+    if (thisWeek.length > 0) groups.push({ label: "Earlier this week", articles: thisWeek });
+
+    // If no articles in any group, just return them flat
+    if (groups.length === 0 && articles.length > 0) {
+      groups.push({ label: null, articles });
+    }
+
+    return groups;
+  }, [articles, sortMode, searchQuery]);
+
   return (
     <div style={{ padding: hasSelections ? "12px 12px 180px" : "12px 12px 110px" }}>
-      {/* Sort toggle */}
-      <div style={{ display: "flex", gap: "6px", padding: "0 4px 12px" }}>
-        {[{ id: "latest", label: "Latest" }, { id: "foryou", label: "For You" }].map((mode) => (
-          <button key={mode.id} onClick={() => onSortModeChange(mode.id)} style={{
-            fontSize: "12px", fontWeight: 700, padding: "6px 16px", borderRadius: "10px", border: "none",
-            background: sortMode === mode.id ? "#00e5a0" : "#1a1a1e",
-            color: sortMode === mode.id ? "#000" : "#888",
-            transition: "all 0.2s",
-          }}>{mode.label}</button>
-        ))}
-      </div>
+      <TrendingTicker tags={trendingTags} onTagClick={onSearchTag} />
 
       {searchQuery && (
         <div style={{
@@ -692,22 +630,39 @@ function FeedView({ articles, loading, error, searchQuery, likedIds, bookmarkedI
         </div>
       )}
 
-      {articles.map((article, i) => (
-        <ArticleCard key={article.id} article={article} index={i} user={user}
-          isLiked={likedIds.has(article.id)} isBookmarked={bookmarkedIds.has(article.id)}
-          isSelected={selectedIds.has(article.id)}
-          onLike={onLike} onBookmark={onBookmark} onShare={onShare} onToggleSelect={onToggleSelect}
-        />
+      {groupedArticles.map((group, gi) => (
+        <div key={group.label || "all"}>
+          {group.label && (
+            <div style={{
+              display: "flex", alignItems: "center", gap: "10px",
+              padding: gi === 0 ? "4px 4px 10px" : "20px 4px 10px",
+            }}>
+              <span style={{
+                fontSize: "11px", fontWeight: 700, color: "#666",
+                letterSpacing: "1.5px", textTransform: "uppercase",
+              }}>{group.label}</span>
+              <div style={{ flex: 1, height: "1px", background: "#222" }} />
+              <span style={{ fontSize: "10px", color: "#555" }}>{group.articles.length}</span>
+            </div>
+          )}
+          {group.articles.map((article, i) => (
+            <ArticleCard key={article.id} article={article} index={i} user={user}
+              isLiked={likedIds.has(article.id)} isBookmarked={bookmarkedIds.has(article.id)}
+              isSelected={selectedIds.has(article.id)}
+              onLike={onLike} onBookmark={onBookmark} onShare={onShare} onToggleSelect={onToggleSelect}
+            />
+          ))}
+        </div>
       ))}
     </div>
   );
 }
 
 // ═══════════════════════════════════════════════
-//  WATCH VIEW — with newsletter selection
+//  WATCH VIEW
 // ═══════════════════════════════════════════════
 
-function WatchView({ selectedVideoIds, onToggleSelectVideo, onCacheVideos }) {
+function WatchView() {
   const [videos, setVideos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [typeFilter, setTypeFilter] = useState("all");
@@ -723,13 +678,11 @@ function WatchView({ selectedVideoIds, onToggleSelectVideo, onCacheVideos }) {
         if (typeFilter !== "all") q = q.eq("video_type", typeFilter);
         const { data } = await q;
         setVideos(data || []);
-        // Cache for newsletter builder
-        if (onCacheVideos) onCacheVideos(data || []);
       } catch { setVideos([]); }
       setLoading(false);
     }
     setLoading(true); load();
-  }, [typeFilter, onCacheVideos]);
+  }, [typeFilter]);
 
   // Derive top topics from video tags
   const topTopics = useMemo(() => {
@@ -765,8 +718,6 @@ function WatchView({ selectedVideoIds, onToggleSelectVideo, onCacheVideos }) {
     });
   }, [videos, searchQuery, topicFilter]);
 
-  const hasSelections = selectedVideoIds && selectedVideoIds.size > 0;
-
   if (selected) {
     return (
       <div style={{ padding: "16px 12px 120px", animation: "fadeSlide 0.3s ease", background: "#000", minHeight: "calc(100vh - 120px)" }}>
@@ -785,7 +736,6 @@ function WatchView({ selectedVideoIds, onToggleSelectVideo, onCacheVideos }) {
               <span style={{ fontSize: 12, color: "#888" }}>⏱ {selected.duration}</span>
               {selected.channel_title && <span style={{ fontSize: 12, color: "#00e5a0" }}>{selected.channel_title}</span>}
             </div>
-            {/* Tags on detail view */}
             {selected.tags?.length > 0 && (
               <div style={{ display: "flex", gap: 5, marginBottom: 14, flexWrap: "wrap" }}>
                 {selected.tags.slice(0, 8).map(tag => (
@@ -796,16 +746,6 @@ function WatchView({ selectedVideoIds, onToggleSelectVideo, onCacheVideos }) {
             <div style={{ display: "flex", gap: 8 }}>
               <button onClick={() => setSelected(null)} style={{ padding: "8px 16px", borderRadius: 10, fontSize: 12, background: "#1a1a1e", color: "#ccc", border: "1px solid #333" }}>← Back</button>
               <a href={`https://www.youtube.com/watch?v=${selected.youtube_id}`} target="_blank" rel="noopener noreferrer" style={{ padding: "8px 16px", borderRadius: 10, fontSize: 12, fontWeight: 700, background: "#00e5a0", color: "#000", display: "inline-block", textDecoration: "none" }}>Watch on YouTube ↗</a>
-              {onToggleSelectVideo && (
-                <button onClick={() => onToggleSelectVideo(selected.id)} style={{
-                  padding: "8px 16px", borderRadius: 10, fontSize: 12, fontWeight: 700,
-                  background: selectedVideoIds?.has(selected.id) ? "rgba(0,229,160,0.15)" : "#1a1a1e",
-                  color: selectedVideoIds?.has(selected.id) ? "#00e5a0" : "#888",
-                  border: `1px solid ${selectedVideoIds?.has(selected.id) ? "#00e5a0" : "#333"}`,
-                }}>
-                  {selectedVideoIds?.has(selected.id) ? "✓ Added" : "+ Newsletter"}
-                </button>
-              )}
             </div>
           </div>
         </div>
@@ -814,7 +754,7 @@ function WatchView({ selectedVideoIds, onToggleSelectVideo, onCacheVideos }) {
   }
 
   return (
-    <div style={{ padding: hasSelections ? "16px 12px 180px" : "16px 12px 120px", animation: "fadeSlide 0.3s ease", background: "#000", minHeight: "calc(100vh - 120px)" }}>
+    <div style={{ padding: "16px 12px 120px", animation: "fadeSlide 0.3s ease", background: "#000", minHeight: "calc(100vh - 120px)" }}>
       {/* Search bar */}
       <div style={{ marginBottom: 12, padding: "0 4px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, background: "#111", borderRadius: 14, padding: "0 14px", border: "1px solid #333" }}>
@@ -892,41 +832,23 @@ function WatchView({ selectedVideoIds, onToggleSelectVideo, onCacheVideos }) {
           {filteredVideos.map((v, i) => {
             const tc = videoTypeColor(v.video_type);
             const thumbUrl = v.thumbnail_url || (v.youtube_id ? `https://img.youtube.com/vi/${v.youtube_id}/hqdefault.jpg` : null);
-            const isVidSelected = selectedVideoIds?.has(v.id);
             return (
-              <div key={v.id} style={{
+              <div key={v.id} onClick={() => setSelected(v)} style={{
                 cursor: "pointer", background: "#111", borderRadius: 14, overflow: "hidden",
-                border: isVidSelected ? "2px solid #00e5a0" : "1px solid #222",
-                transition: "border-color 0.2s, transform 0.15s",
+                border: "1px solid #222", transition: "border-color 0.2s, transform 0.15s",
                 animation: `cardIn 0.3s ease ${i * 0.03}s both`,
-                position: "relative",
               }}
-                onMouseEnter={e => { if (!isVidSelected) e.currentTarget.style.borderColor = "#444"; e.currentTarget.style.transform = "translateY(-2px)"; }}
-                onMouseLeave={e => { if (!isVidSelected) e.currentTarget.style.borderColor = "#222"; e.currentTarget.style.transform = "none"; }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = "#444"; e.currentTarget.style.transform = "translateY(-2px)"; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = "#222"; e.currentTarget.style.transform = "none"; }}
               >
-                {/* Selection toggle button */}
-                {onToggleSelectVideo && (
-                  <button onClick={(e) => { e.stopPropagation(); onToggleSelectVideo(v.id); }}
-                    style={{
-                      position: "absolute", top: 6, right: 6, zIndex: 5,
-                      width: 24, height: 24, borderRadius: "50%",
-                      background: isVidSelected ? "#00e5a0" : "rgba(0,0,0,0.6)",
-                      border: isVidSelected ? "none" : "1.5px solid rgba(255,255,255,0.3)",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      color: isVidSelected ? "#000" : "#fff", fontSize: 12, fontWeight: 700,
-                      transition: "all 0.2s",
-                    }}
-                  >{isVidSelected ? "✓" : "+"}</button>
-                )}
-
-                <div onClick={() => setSelected(v)} style={{ width: "100%", aspectRatio: "16/9", position: "relative", background: thumbUrl ? `url(${thumbUrl}) center/cover` : "linear-gradient(135deg, #111, #000)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <div style={{ width: "100%", aspectRatio: "16/9", position: "relative", background: thumbUrl ? `url(${thumbUrl}) center/cover` : "linear-gradient(135deg, #111, #000)", display: "flex", alignItems: "center", justifyContent: "center" }}>
                   <span style={{ position: "absolute", top: 6, left: 6, fontSize: 8, fontFamily: "monospace", padding: "2px 6px", borderRadius: 3, background: `${tc}30`, color: tc, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1 }}>{videoTypeLabel(v.video_type)}</span>
                   {v.duration && <span style={{ position: "absolute", bottom: 6, right: 6, fontSize: 10, fontFamily: "monospace", padding: "2px 6px", borderRadius: 3, background: "rgba(0,0,0,0.8)", color: "#ccc" }}>{v.duration}</span>}
                   <div style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(0,0,0,0.5)", border: "1.5px solid rgba(0,229,160,0.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
                     <div style={{ width: 0, height: 0, borderLeft: "9px solid #00e5a0", borderTop: "6px solid transparent", borderBottom: "6px solid transparent", marginLeft: 2 }} />
                   </div>
                 </div>
-                <div onClick={() => setSelected(v)} style={{ padding: "10px 12px" }}>
+                <div style={{ padding: "10px 12px" }}>
                   <div style={{ fontSize: 13, fontWeight: 700, color: "#eee", lineHeight: 1.3, marginBottom: 5, fontFamily: "Georgia, serif", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{v.title}</div>
                   <div style={{ display: "flex", justifyContent: "space-between" }}>
                     <span style={{ fontSize: 10, color: "#888" }}>{v.channel_title || v.sources?.name}</span>
@@ -943,10 +865,10 @@ function WatchView({ selectedVideoIds, onToggleSelectVideo, onCacheVideos }) {
 }
 
 // ═══════════════════════════════════════════════
-//  LISTEN VIEW — with newsletter selection
+//  LISTEN VIEW
 // ═══════════════════════════════════════════════
 
-function ListenView({ selectedEpisodeIds, onToggleSelectEpisode, onCacheEpisodes }) {
+function ListenView() {
   const [episodes, setEpisodes] = useState([]);
   const [sources, setSources] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -966,29 +888,24 @@ function ListenView({ selectedEpisodeIds, onToggleSelectEpisode, onCacheEpisodes
         if (sourceFilter) q = q.eq("source_id", sourceFilter);
         const { data } = await q;
         setEpisodes(data || []);
-        // Cache for newsletter builder
-        if (onCacheEpisodes) onCacheEpisodes(data || []);
         const { data: srcs } = await supabase.from("sources").select("*").eq("type", "podcast").eq("active", true).not("rss_url", "is", null).order("tier");
         setSources(srcs || []);
       } catch { setEpisodes([]); setSources([]); }
       setLoading(false);
     }
     setLoading(true); load();
-  }, [sourceFilter, onCacheEpisodes]);
+  }, [sourceFilter]);
 
   // Real audio playback
   const handlePlay = useCallback((ep) => {
     if (playing === ep.id) {
-      // Pause
       audioRef.current?.pause();
       setPlaying(null);
       return;
     }
-    // Stop current
     if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
 
     if (!ep.audio_url) {
-      // No audio URL — open the episode link instead
       if (ep.link) window.open(ep.link, "_blank");
       return;
     }
@@ -1005,7 +922,6 @@ function ListenView({ selectedEpisodeIds, onToggleSelectEpisode, onCacheEpisodes
     });
     audio.addEventListener("ended", () => { setPlaying(null); setProgress(0); });
     audio.addEventListener("error", () => {
-      // Fallback: open in browser if audio won't play
       setPlaying(null);
       if (ep.link) window.open(ep.link, "_blank");
     });
@@ -1015,12 +931,10 @@ function ListenView({ selectedEpisodeIds, onToggleSelectEpisode, onCacheEpisodes
     });
   }, [playing]);
 
-  // Cleanup audio on unmount
   useEffect(() => {
     return () => { if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; } };
   }, []);
 
-  // Search filter
   const filteredEpisodes = useMemo(() => {
     if (!searchQuery) return episodes;
     const q = searchQuery.toLowerCase();
@@ -1032,7 +946,6 @@ function ListenView({ selectedEpisodeIds, onToggleSelectEpisode, onCacheEpisodes
     );
   }, [episodes, searchQuery]);
 
-  // Format seconds to mm:ss
   const fmtTime = (s) => {
     if (!s || isNaN(s)) return "0:00";
     const m = Math.floor(s / 60);
@@ -1040,10 +953,8 @@ function ListenView({ selectedEpisodeIds, onToggleSelectEpisode, onCacheEpisodes
     return `${m}:${sec < 10 ? "0" : ""}${sec}`;
   };
 
-  const hasSelections = selectedEpisodeIds && selectedEpisodeIds.size > 0;
-
   return (
-    <div style={{ padding: hasSelections ? "16px 12px 180px" : "16px 12px 120px", animation: "fadeSlide 0.3s ease", background: "#000", minHeight: "calc(100vh - 120px)" }}>
+    <div style={{ padding: "16px 12px 120px", animation: "fadeSlide 0.3s ease", background: "#000", minHeight: "calc(100vh - 120px)" }}>
       {/* Header */}
       <div style={{ display: "flex", gap: 14, alignItems: "center", padding: "14px 16px", background: "#111", borderRadius: 16, border: "1px solid #222", marginBottom: 14 }}>
         <div style={{ width: 56, height: 56, borderRadius: 12, flexShrink: 0, background: "linear-gradient(135deg, rgba(0,229,160,0.1), rgba(0,180,216,0.1))", border: "1px solid rgba(0,229,160,0.2)", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -1055,7 +966,7 @@ function ListenView({ selectedEpisodeIds, onToggleSelectEpisode, onCacheEpisodes
         </div>
       </div>
 
-      {/* Platform links — only show for TIC or All Shows */}
+      {/* Platform links */}
       {(!sourceFilter || sources.find(s => s.id === sourceFilter)?.name === "Talent Intelligence Collective Podcast") && (
         <div style={{ display: "flex", gap: 6, marginBottom: 14, justifyContent: "center" }}>
           {[
@@ -1121,7 +1032,6 @@ function ListenView({ selectedEpisodeIds, onToggleSelectEpisode, onCacheEpisodes
               </div>
             </div>
           </div>
-          {/* Progress bar */}
           <div style={{ height: 3, background: "#222", borderRadius: 2, overflow: "hidden", cursor: "pointer" }}
             onClick={(e) => {
               if (!audioRef.current || !duration) return;
@@ -1148,15 +1058,8 @@ function ListenView({ selectedEpisodeIds, onToggleSelectEpisode, onCacheEpisodes
             const isPlay = playing === ep.id;
             const isExp = expanded === ep.id;
             const hasAudio = !!ep.audio_url;
-            const isEpSelected = selectedEpisodeIds?.has(ep.id);
             return (
-              <div key={ep.id} style={{
-                background: "#111", borderRadius: 14, overflow: "hidden",
-                border: isEpSelected ? "2px solid #00e5a0" : `1px solid ${isPlay ? "#00e5a0" : "#222"}`,
-                transition: "border-color 0.3s",
-                animation: `cardIn 0.3s ease ${i * 0.03}s both`,
-              }}>
-                {/* Playing progress indicator */}
+              <div key={ep.id} style={{ background: "#111", borderRadius: 14, overflow: "hidden", border: `1px solid ${isPlay ? "#00e5a0" : "#222"}`, transition: "border-color 0.3s", animation: `cardIn 0.3s ease ${i * 0.03}s both` }}>
                 {isPlay && <div style={{ height: 2, background: "#222" }}><div style={{ height: "100%", width: `${progress}%`, background: "#00e5a0", transition: "width 0.3s linear" }} /></div>}
                 <div style={{ padding: "14px 16px" }}>
                   <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
@@ -1190,18 +1093,6 @@ function ListenView({ selectedEpisodeIds, onToggleSelectEpisode, onCacheEpisodes
                       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                         {ep.duration && <span style={{ fontSize: 10, color: "#666" }}>⏱ {ep.duration}</span>}
                         {!hasAudio && ep.link && <a href={ep.link} target="_blank" rel="noopener noreferrer" style={{ fontSize: 10, color: "#00e5a0", textDecoration: "none" }}>Open ↗</a>}
-                        {/* Newsletter selection button */}
-                        {onToggleSelectEpisode && (
-                          <button onClick={() => onToggleSelectEpisode(ep.id)} style={{
-                            fontSize: 10, fontWeight: 700, padding: "3px 10px", borderRadius: 10,
-                            background: isEpSelected ? "rgba(0,229,160,0.15)" : "transparent",
-                            color: isEpSelected ? "#00e5a0" : "#666",
-                            border: `1px solid ${isEpSelected ? "#00e5a0" : "#333"}`,
-                            transition: "all 0.2s",
-                          }}>
-                            {isEpSelected ? "✓ Added" : "+ Newsletter"}
-                          </button>
-                        )}
                         <button onClick={() => setExpanded(isExp ? null : ep.id)} style={{ fontSize: 11, color: "#00e5a0", marginLeft: "auto", background: "none", border: "none" }}>{isExp ? "Less ↑" : "More ↓"}</button>
                       </div>
                     </div>
@@ -1212,6 +1103,38 @@ function ListenView({ selectedEpisodeIds, onToggleSelectEpisode, onCacheEpisodes
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
+//  TRENDING TICKER — dynamic
+// ═══════════════════════════════════════════════
+
+function TrendingTicker({ tags, onTagClick }) {
+  if (!tags || tags.length === 0) return null;
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: "10px", padding: "10px 14px",
+      marginBottom: "14px", background: "rgba(255,255,255,0.015)",
+      borderRadius: "14px", border: "1px solid #1a1a1a",
+      overflowX: "auto", scrollbarWidth: "none",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "5px", color: "#00e5a0", flexShrink: 0 }}>
+        <TrendingIcon />
+        <span style={{ fontSize: "10px", fontWeight: 800, letterSpacing: "1.2px" }}>TRENDING</span>
+      </div>
+      <div style={{ width: "1px", height: "14px", background: "#333", flexShrink: 0 }} />
+      {tags.map((t) => (
+        <button key={t.tag} onClick={() => onTagClick(t.tag.slice(1))} style={{
+          background: "none", border: "none", color: "#888",
+          fontSize: "11px", fontWeight: 600, whiteSpace: "nowrap",
+          padding: "3px 6px", borderRadius: "6px", transition: "all 0.2s",
+        }}
+          onMouseEnter={(e) => { e.currentTarget.style.color = "#00e5a0"; e.currentTarget.style.background = "rgba(0,229,160,0.08)"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.color = "#888"; e.currentTarget.style.background = "none"; }}
+        >{t.tag}</button>
+      ))}
     </div>
   );
 }
@@ -1316,196 +1239,6 @@ function SavedView({ articles, likedIds, bookmarkedIds, user, onLike, onBookmark
             onLike={onLike} onBookmark={onBookmark} onShare={onShare} />
         ))
       )}
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════
-//  PROFILE EDITOR
-// ═══════════════════════════════════════════════
-
-function ProfileEditor({ userId, user, streakData, onClose, onToast }) {
-  const [fullName, setFullName] = useState("");
-  const [company, setCompany] = useState("");
-  const [jobTitle, setJobTitle] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-
-  const streakTier = streakData ? getStreakTier(streakData.current_streak) : null;
-  const earnedBadges = getEarnedBadges(streakData);
-
-  // Load current profile
-  useEffect(() => {
-    if (!userId) return;
-    fetchUserProfile(userId).then((profile) => {
-      if (profile) {
-        setFullName(profile.full_name || "");
-        setCompany(profile.company || "");
-        setJobTitle(profile.job_title || "");
-      } else {
-        // Fallback to auth metadata
-        setFullName(user?.user_metadata?.full_name || "");
-      }
-      setLoading(false);
-    });
-  }, [userId, user]);
-
-  const handleSave = async () => {
-    if (!fullName.trim()) { onToast("Name is required"); return; }
-    setSaving(true);
-    const ok = await updateUserProfile(userId, {
-      fullName: fullName.trim(),
-      company: company.trim(),
-      jobTitle: jobTitle.trim(),
-    });
-    setSaving(false);
-    if (ok) {
-      onToast("Profile updated");
-      onClose();
-    } else {
-      onToast("Failed to save — try again");
-    }
-  };
-
-  const inputStyle = {
-    width: "100%", padding: "14px 16px", borderRadius: "14px",
-    border: "1px solid #333", background: "#111", color: "#eee",
-    fontSize: "14px", outline: "none", fontFamily: "'DM Sans', sans-serif",
-    boxSizing: "border-box",
-  };
-
-  const labelStyle = {
-    display: "block", fontSize: "11px", fontWeight: 700, color: "#888",
-    letterSpacing: "0.8px", marginBottom: "6px", textTransform: "uppercase",
-  };
-
-  return (
-    <div style={{
-      position: "fixed", inset: 0, zIndex: 2000, background: "#000",
-      display: "flex", flexDirection: "column", maxWidth: "480px", margin: "0 auto",
-    }}>
-      <style>{`
-        .pe-input:focus { border-color: #00e5a0 !important; }
-        .pe-input::placeholder { color: #555; }
-      `}</style>
-
-      {/* Header */}
-      <div style={{
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "12px 16px", borderBottom: "1px solid #222",
-      }}>
-        <button onClick={onClose} style={{
-          background: "none", border: "none", color: "#999", padding: "4px",
-          fontSize: "24px", lineHeight: 1,
-        }}>✕</button>
-        <div style={{ fontSize: "15px", fontWeight: 700, color: "#fff" }}>Your Profile</div>
-        <button onClick={handleSave} disabled={saving || loading} style={{
-          background: saving ? "rgba(0,229,160,0.3)" : "#00e5a0",
-          border: "none", borderRadius: "10px", color: "#000",
-          padding: "8px 16px", fontSize: "13px", fontWeight: 700,
-          opacity: saving || loading ? 0.5 : 1,
-        }}>{saving ? "Saving…" : "Save"}</button>
-      </div>
-
-      {/* Content */}
-      <div style={{ flex: 1, overflow: "auto", padding: "20px 16px", scrollbarWidth: "none" }}>
-        {loading ? (
-          <div style={{ textAlign: "center", padding: "60px 0", color: "#666", fontSize: "13px" }}>Loading profile…</div>
-        ) : (
-          <>
-            {/* Avatar + streak summary */}
-            <div style={{ textAlign: "center", marginBottom: "28px" }}>
-              <div style={{
-                width: "64px", height: "64px", borderRadius: "50%", margin: "0 auto 12px",
-                background: "linear-gradient(135deg, #00E5B8, #00b4d8)",
-                display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: "22px", fontWeight: 800, color: "#000",
-              }}>
-                {(fullName || user?.email || "?").charAt(0).toUpperCase()}
-              </div>
-              {user?.email && (
-                <div style={{ fontSize: "12px", color: "#666", marginBottom: "8px" }}>{user.email}</div>
-              )}
-              {streakData && streakTier && (
-                <div style={{
-                  display: "inline-flex", alignItems: "center", gap: "6px",
-                  padding: "6px 14px", borderRadius: "14px",
-                  background: `${streakTier.color}12`, border: `1px solid ${streakTier.color}25`,
-                }}>
-                  <span style={{ fontSize: "16px" }}>{streakTier.icon}</span>
-                  <span style={{ fontSize: "13px", fontWeight: 700, color: streakTier.color }}>
-                    {streakData.current_streak}-day streak
-                  </span>
-                  <span style={{ fontSize: "11px", color: "#666" }}>· {streakTier.label}</span>
-                </div>
-              )}
-            </div>
-
-            {/* Earned badges */}
-            {earnedBadges.length > 0 && (
-              <div style={{ marginBottom: "24px" }}>
-                <div style={labelStyle}>BADGES EARNED</div>
-                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                  {earnedBadges.map((b) => (
-                    <div key={b.label} style={{
-                      display: "flex", alignItems: "center", gap: "4px",
-                      padding: "5px 10px", borderRadius: "10px",
-                      background: "#111", border: "1px solid #333",
-                    }}>
-                      <span style={{ fontSize: "13px" }}>{b.icon}</span>
-                      <span style={{ fontSize: "11px", fontWeight: 600, color: "#ccc" }}>{b.label}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Stats row */}
-            {streakData && (
-              <div style={{
-                display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px",
-                marginBottom: "28px",
-              }}>
-                {[
-                  { label: "Best Streak", value: `${streakData.longest_streak}d` },
-                  { label: "Active Days", value: streakData.total_active_days },
-                  { label: "Likes Given", value: streakData.total_likes },
-                ].map((s) => (
-                  <div key={s.label} style={{
-                    padding: "12px", borderRadius: "12px", background: "#111",
-                    border: "1px solid #222", textAlign: "center",
-                  }}>
-                    <div style={{ fontSize: "18px", fontWeight: 700, color: "#fff" }}>{s.value}</div>
-                    <div style={{ fontSize: "10px", color: "#666", marginTop: "2px" }}>{s.label}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Editable fields */}
-            <div style={{ marginBottom: "16px" }}>
-              <label style={labelStyle}>Display Name</label>
-              <input className="pe-input" value={fullName} onChange={(e) => setFullName(e.target.value)}
-                placeholder="Your name" style={inputStyle} />
-            </div>
-            <div style={{ marginBottom: "16px" }}>
-              <label style={labelStyle}>Company</label>
-              <input className="pe-input" value={company} onChange={(e) => setCompany(e.target.value)}
-                placeholder="Where do you work?" style={inputStyle} />
-            </div>
-            <div style={{ marginBottom: "16px" }}>
-              <label style={labelStyle}>Job Title</label>
-              <input className="pe-input" value={jobTitle} onChange={(e) => setJobTitle(e.target.value)}
-                placeholder="e.g. Head of Talent Intelligence" style={inputStyle} />
-            </div>
-
-            {/* Member since */}
-            <div style={{ textAlign: "center", padding: "20px 0", fontSize: "11px", color: "#555" }}>
-              Member since {new Date(user?.created_at || Date.now()).toLocaleDateString("en-GB", { month: "long", year: "numeric" })}
-            </div>
-          </>
-        )}
-      </div>
     </div>
   );
 }
