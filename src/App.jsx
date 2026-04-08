@@ -509,7 +509,6 @@ function FeedView({ articles, loading, error, searchQuery, likedIds, bookmarkedI
   const hasSelections = selectedIds.size > 0;
   return (
     <div style={{ padding: hasSelections ? "12px 12px 180px" : "12px 12px 110px" }}>
-      <TrendingTicker tags={trendingTags} onTagClick={onSearchTag} />
 
       {searchQuery && (
         <div style={{
