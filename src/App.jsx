@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { supabase, fetchArticles, incrementEngagement, trackInteraction, fetchUserAffinities } from "./supabase.js";
+import { supabase, fetchArticles, incrementEngagement } from "./supabase.js";
 import AuthPage from "./AuthPage.jsx";
 import ArticleCard from "./ArticleCard.jsx";
 import ShareSheet from "./ShareSheet.jsx";
 import NewsletterBuilder from "./NewsletterBuilder.jsx";
+import AudioBriefing from "./AudioBriefing.jsx";
 import Toast from "./Toast.jsx";
 import {
-  SearchIcon, CloseIcon, BookmarkIcon,
+  SearchIcon, CloseIcon, TrendingIcon, BookmarkIcon,
   FeedIcon, DiscoverIcon, PeopleIcon, NewsletterIcon,
 } from "./Icons.jsx";
 
@@ -94,7 +95,7 @@ export default function App() {
 }
 
 // ═══════════════════════════════════════════════
-//  PULSE APP — with personalisation + sort toggle
+//  PULSE APP — Phase 2: server-side engagement
 // ═══════════════════════════════════════════════
 
 function PulseApp({ session }) {
@@ -113,15 +114,15 @@ function PulseApp({ session }) {
 
   const [selectedIds, setSelectedIds] = useState([]);
   const [showNewsletter, setShowNewsletter] = useState(false);
+  const [showAudioBriefing, setShowAudioBriefing] = useState(false);
 
   // Server-side engagement (replaces localStorage)
   const [likedIds, setLikedIds] = useState(new Set());
   const [bookmarkedIds, setBookmarkedIds] = useState(new Set());
   const [engagementLoaded, setEngagementLoaded] = useState(false);
 
-  // Personalisation: sort mode + affinities
-  const [sortMode, setSortMode] = useState("latest");
-  const [affinities, setAffinities] = useState({});
+  // Dynamic trending tags
+  const [trendingTags, setTrendingTags] = useState([]);
 
   const likedIdsRef = useRef(likedIds);
   useEffect(() => { likedIdsRef.current = likedIds; }, [likedIds]);
@@ -156,18 +157,12 @@ function PulseApp({ session }) {
     loadEngagement();
   }, [userId]);
 
-  // ─── Load personalisation affinities ───
-  useEffect(() => {
-    if (!userId) return;
-    fetchUserAffinities(userId).then(setAffinities);
-  }, [userId]);
-
   // ─── Data Loading ───
   const loadArticles = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchArticles({ limit: 200 });
+      const data = await fetchArticles({ limit: 100 });
       setArticles(data);
     } catch (err) {
       console.error("Failed to load articles:", err);
@@ -179,48 +174,58 @@ function PulseApp({ session }) {
 
   useEffect(() => { loadArticles(); }, [loadArticles]);
 
-  // ─── Client-side filtering + personalisation sorting ───
-  const filteredArticles = useMemo(() => {
-    const freshnessCutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  // ─── Dynamic trending tags (from last 48h of articles) ───
+  useEffect(() => {
+    if (articles.length === 0) return;
+    const cutoff = Date.now() - 48 * 60 * 60 * 1000;
+    const tagCounts = {};
 
-    const filtered = articles.filter((a) => {
-      // Freshness: use created_at (fetch date) — Google News surfaces old articles
-      const fetchDate = new Date(a.created_at).getTime();
-      if (fetchDate < freshnessCutoff) return false;
-
-      // Category filter
-      if (activeCategory !== "All" && a.category !== activeCategory) return false;
-
-      // Search filter
-      if (searchQuery) {
-        const q = searchQuery.toLowerCase();
-        return (
-          (a.title || "").toLowerCase().includes(q) ||
-          (a.tldr || "").toLowerCase().includes(q) ||
-          (a.tags || []).some((t) => t.toLowerCase().includes(q)) ||
-          (a.category || "").toLowerCase().includes(q)
-        );
+    for (const a of articles) {
+      const pubDate = new Date(a.published_at || a.created_at).getTime();
+      if (pubDate < cutoff) continue;
+      for (const tag of (a.tags || [])) {
+        const clean = tag.replace(/^#/, "");
+        if (clean.length > 2) {
+          tagCounts[clean] = (tagCounts[clean] || 0) + 1;
+        }
       }
-      return true;
-    });
-
-    // Sort: "foryou" blends recency (60%) with category affinity (40%)
-    if (sortMode === "foryou" && Object.keys(affinities).length > 0) {
-      const maxAff = Math.max(...Object.values(affinities).map((a) => a.total), 1);
-      return filtered.sort((a, b) => {
-        const recA = Math.max(0, 1 - (Date.now() - new Date(a.published_at || a.created_at).getTime()) / (7 * 86400000));
-        const recB = Math.max(0, 1 - (Date.now() - new Date(b.published_at || b.created_at).getTime()) / (7 * 86400000));
-        const affA = (affinities[a.category]?.total || 0) / maxAff;
-        const affB = (affinities[b.category]?.total || 0) / maxAff;
-        return (recB * 0.6 + affB * 0.4) - (recA * 0.6 + affA * 0.4);
-      });
     }
 
-    // Default "latest": pure chronological (newest first)
-    return filtered.sort((a, b) =>
-      new Date(b.published_at || b.created_at) - new Date(a.published_at || a.created_at)
-    );
-  }, [articles, activeCategory, searchQuery, sortMode, affinities]);
+    const sorted = Object.entries(tagCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([tag, count]) => ({ tag: `#${tag}`, count: String(count) }));
+
+    // Fallback if no tags found in recent articles
+    if (sorted.length === 0) {
+      setTrendingTags([]);
+    } else {
+      setTrendingTags(sorted);
+    }
+  }, [articles]);
+
+  // ─── Client-side filtering (7-day freshness) ───
+  const filteredArticles = useMemo(() => {
+    const freshnessCutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    return articles
+      .filter((a) => {
+        const pubDate = new Date(a.published_at || a.created_at).getTime();
+        if (pubDate < freshnessCutoff) return false;
+        const matchesCategory = activeCategory === "All" || a.category === activeCategory;
+        if (!matchesCategory) return false;
+        if (searchQuery) {
+          const q = searchQuery.toLowerCase();
+          return (
+            (a.title || "").toLowerCase().includes(q) ||
+            (a.tldr || "").toLowerCase().includes(q) ||
+            (a.tags || []).some((t) => t.toLowerCase().includes(q)) ||
+            (a.category || "").toLowerCase().includes(q)
+          );
+        }
+        return true;
+      })
+      .sort((a, b) => new Date(b.published_at || b.created_at) - new Date(a.published_at || a.created_at));
+  }, [articles, activeCategory, searchQuery]);
 
   useEffect(() => {
     if (searchOpen && searchInputRef.current) searchInputRef.current.focus();
@@ -257,13 +262,7 @@ function PulseApp({ session }) {
     }, { onConflict: "user_id,article_id" }).then(({ error }) => {
       if (error) console.error("Like sync error:", error);
     });
-
-    // Track interaction for personalisation (only on like, not unlike)
-    if (!wasLiked) {
-      const article = articles.find(a => a.id === articleId);
-      trackInteraction(userId, articleId, "like", article);
-    }
-  }, [userId, articles]);
+  }, [userId]);
 
   // ─── Server-side Bookmark Handler ───
   const handleBookmark = useCallback((articleId) => {
@@ -285,19 +284,12 @@ function PulseApp({ session }) {
     }, { onConflict: "user_id,article_id" }).then(({ error }) => {
       if (error) console.error("Bookmark sync error:", error);
     });
-
-    // Track interaction for personalisation (only on bookmark, not unbookmark)
-    if (!wasBookmarked) {
-      const article = articles.find(a => a.id === articleId);
-      trackInteraction(userId, articleId, "bookmark", article);
-    }
-  }, [userId, bookmarkedIds, showToast, articles]);
+  }, [userId, bookmarkedIds, showToast]);
 
   const handleShare = useCallback((article) => {
     setShareTarget(article);
     incrementEngagement(article.id, "share_count", 1);
-    trackInteraction(userId, article.id, "share", article);
-  }, [userId]);
+  }, []);
 
   // ─── Curate Mode ───
   const handleToggleSelect = useCallback((articleId) => {
@@ -332,12 +324,10 @@ function PulseApp({ session }) {
       <Header
         searchOpen={searchOpen} searchQuery={searchQuery} activeCategory={activeCategory}
         searchInputRef={searchInputRef} user={session?.user} activeTab={activeTab}
-        sortMode={sortMode}
         onLogout={async () => { await supabase.auth.signOut(); }}
         onToggleSearch={() => { setSearchOpen(!searchOpen); if (searchOpen) setSearchQuery(""); }}
         onSearchChange={setSearchQuery}
         onCategoryChange={(cat) => { setActiveCategory(cat); setSearchQuery(""); setSearchOpen(false); }}
-        onSortModeChange={setSortMode}
       />
 
       <main style={{ position: "relative", zIndex: 1 }}>
@@ -345,10 +335,11 @@ function PulseApp({ session }) {
           <FeedView
             articles={filteredArticles} loading={loading} error={error} searchQuery={searchQuery}
             likedIds={likedIds} bookmarkedIds={bookmarkedIds} selectedIds={selectedIdSet}
-            user={session?.user} sortMode={sortMode}
+            trendingTags={trendingTags} user={session?.user}
             onLike={handleLike} onBookmark={handleBookmark} onShare={handleShare}
             onToggleSelect={handleToggleSelect}
             onClearFilters={() => { setActiveCategory("All"); setSearchQuery(""); setSearchOpen(false); }}
+            onSearchTag={(tag) => { setSearchQuery(tag); setSearchOpen(true); }}
             onRetry={loadArticles}
           />
         )}
@@ -363,6 +354,7 @@ function PulseApp({ session }) {
 
       <BottomNav activeTab={activeTab} onTabChange={setActiveTab} />
 
+      {/* ─── Curation bar ─── */}
       {selectedIds.length > 0 && (
         <div style={{
           position: "fixed", bottom: "72px", left: "50%", transform: "translateX(-50%)",
@@ -380,6 +372,12 @@ function PulseApp({ session }) {
             </div>
             <div style={{ display: "flex", gap: "8px" }}>
               <button onClick={() => setSelectedIds([])} style={{ background: "none", border: "1px solid #444", borderRadius: "12px", color: "#ccc", padding: "10px 14px", fontSize: "12px", fontWeight: 600 }}>Clear</button>
+              <button
+                onClick={() => setShowAudioBriefing(true)}
+                title="Create audio briefing"
+                style={{ background: "#1a1a1e", border: "1px solid #333", borderRadius: "12px", color: "#ccc", padding: "10px 14px", fontSize: "15px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                🎙
+              </button>
               <button onClick={handleOpenNewsletter} style={{ background: "#00e5a0", border: "none", borderRadius: "12px", color: "#000", padding: "10px 18px", fontSize: "13px", fontWeight: 700, display: "flex", alignItems: "center", gap: "6px" }}>
                 <NewsletterIcon size={16} /> Build
               </button>
@@ -391,15 +389,16 @@ function PulseApp({ session }) {
       <ShareSheet article={shareTarget} onClose={() => setShareTarget(null)} onToast={showToast} />
       <Toast message={toast.msg} visible={toast.show} />
       {showNewsletter && <NewsletterBuilder articles={selectedArticles} onClose={() => setShowNewsletter(false)} onToast={showToast} />}
+      {showAudioBriefing && <AudioBriefing articles={selectedArticles} userId={userId} onClose={() => setShowAudioBriefing(false)} onToast={showToast} />}
     </div>
   );
 }
 
 // ═══════════════════════════════════════════════
-//  HEADER — with Latest / For You toggle
+//  HEADER
 // ═══════════════════════════════════════════════
 
-function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user, activeTab, sortMode, onLogout, onToggleSearch, onSearchChange, onCategoryChange, onSortModeChange }) {
+function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user, activeTab, onLogout, onToggleSearch, onSearchChange, onCategoryChange }) {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userInitials = user?.user_metadata?.full_name
     ? user.user_metadata.full_name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)
@@ -480,40 +479,22 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
       )}
 
       {showCategories && (
-        <>
-          {/* Sort toggle + category pills */}
-          <div style={{ display: "flex", alignItems: "center", gap: "7px", padding: "10px 16px 0", overflowX: "auto", scrollbarWidth: "none" }}>
-            {/* Latest / For You toggle */}
-            <div style={{ display: "flex", background: "#111", borderRadius: "20px", padding: "2px", flexShrink: 0, border: "1px solid #222" }}>
-              {[{ key: "latest", label: "Latest" }, { key: "foryou", label: "For You" }].map(({ key, label }) => (
-                <button key={key} onClick={() => onSortModeChange(key)} style={{
-                  padding: "4px 12px", borderRadius: "18px", fontSize: "10px", fontWeight: 700,
-                  border: "none", transition: "all 0.2s",
-                  background: sortMode === key ? "#00e5a0" : "transparent",
-                  color: sortMode === key ? "#000" : "#666",
-                  letterSpacing: "0.3px",
-                }}>{label}</button>
-              ))}
-            </div>
-            <div style={{ width: "1px", height: "16px", background: "#333", flexShrink: 0 }} />
-            {/* Category pills */}
-            {CATEGORIES.map((cat) => {
-              const isActive = activeCategory === cat;
-              const color = cat === "All" ? "#00e5a0" : (CAT_COLORS[cat] || "#00e5a0");
-              return (
-                <button key={cat} onClick={() => onCategoryChange(cat)} style={{
-                  padding: "5px 14px", borderRadius: "20px", whiteSpace: "nowrap",
-                  fontSize: "11px", fontWeight: 700, letterSpacing: "0.3px",
-                  border: isActive ? `1px solid ${color}40` : "1px solid #333",
-                  background: isActive ? `${color}12` : "#111",
-                  color: isActive ? color : "#999",
-                  transition: "all 0.25s ease",
-                }}>{cat}</button>
-              );
-            })}
-          </div>
-          <div style={{ height: "10px" }} />
-        </>
+        <div style={{ display: "flex", gap: "7px", padding: "12px 16px 12px", overflowX: "auto", scrollbarWidth: "none" }}>
+          {CATEGORIES.map((cat) => {
+            const isActive = activeCategory === cat;
+            const color = cat === "All" ? "#00e5a0" : (CAT_COLORS[cat] || "#00e5a0");
+            return (
+              <button key={cat} onClick={() => onCategoryChange(cat)} style={{
+                padding: "5px 14px", borderRadius: "20px", whiteSpace: "nowrap",
+                fontSize: "11px", fontWeight: 700, letterSpacing: "0.3px",
+                border: isActive ? `1px solid ${color}40` : "1px solid #333",
+                background: isActive ? `${color}12` : "#111",
+                color: isActive ? color : "#999",
+                transition: "all 0.25s ease",
+              }}>{cat}</button>
+            );
+          })}
+        </div>
       )}
       {!showCategories && !searchOpen && <div style={{ height: "12px" }} />}
     </header>
@@ -521,49 +502,14 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
 }
 
 // ═══════════════════════════════════════════════
-//  FEED VIEW — with time grouping + sort mode
+//  FEED VIEW — now with dynamic trending + user prop
 // ═══════════════════════════════════════════════
 
-function FeedView({ articles, loading, error, searchQuery, likedIds, bookmarkedIds, selectedIds, user, sortMode, onLike, onBookmark, onShare, onToggleSelect, onClearFilters, onRetry }) {
+function FeedView({ articles, loading, error, searchQuery, likedIds, bookmarkedIds, selectedIds, trendingTags, user, onLike, onBookmark, onShare, onToggleSelect, onClearFilters, onSearchTag, onRetry }) {
   const hasSelections = selectedIds.size > 0;
-
-  // Group articles by time period for "latest" mode
-  const groupedArticles = useMemo(() => {
-    if (sortMode !== "latest" || searchQuery) {
-      // For You mode or search: flat list, no grouping
-      return [{ label: null, articles }];
-    }
-
-    const now = Date.now();
-    const h24 = 24 * 60 * 60 * 1000;
-    const h48 = 48 * 60 * 60 * 1000;
-
-    const today = [];
-    const yesterday = [];
-    const thisWeek = [];
-
-    for (const a of articles) {
-      const age = now - new Date(a.published_at || a.created_at).getTime();
-      if (age < h24) today.push(a);
-      else if (age < h48) yesterday.push(a);
-      else thisWeek.push(a);
-    }
-
-    const groups = [];
-    if (today.length > 0) groups.push({ label: "Today", articles: today });
-    if (yesterday.length > 0) groups.push({ label: "Yesterday", articles: yesterday });
-    if (thisWeek.length > 0) groups.push({ label: "Earlier this week", articles: thisWeek });
-
-    // If no articles in any group, just return them flat
-    if (groups.length === 0 && articles.length > 0) {
-      groups.push({ label: null, articles });
-    }
-
-    return groups;
-  }, [articles, sortMode, searchQuery]);
-
   return (
     <div style={{ padding: hasSelections ? "12px 12px 180px" : "12px 12px 110px" }}>
+      <TrendingTicker tags={trendingTags} onTagClick={onSearchTag} />
 
       {searchQuery && (
         <div style={{
@@ -597,29 +543,12 @@ function FeedView({ articles, loading, error, searchQuery, likedIds, bookmarkedI
         </div>
       )}
 
-      {groupedArticles.map((group, gi) => (
-        <div key={group.label || "all"}>
-          {group.label && (
-            <div style={{
-              display: "flex", alignItems: "center", gap: "10px",
-              padding: gi === 0 ? "4px 4px 10px" : "20px 4px 10px",
-            }}>
-              <span style={{
-                fontSize: "11px", fontWeight: 700, color: "#666",
-                letterSpacing: "1.5px", textTransform: "uppercase",
-              }}>{group.label}</span>
-              <div style={{ flex: 1, height: "1px", background: "#222" }} />
-              <span style={{ fontSize: "10px", color: "#555" }}>{group.articles.length}</span>
-            </div>
-          )}
-          {group.articles.map((article, i) => (
-            <ArticleCard key={article.id} article={article} index={i} user={user}
-              isLiked={likedIds.has(article.id)} isBookmarked={bookmarkedIds.has(article.id)}
-              isSelected={selectedIds.has(article.id)}
-              onLike={onLike} onBookmark={onBookmark} onShare={onShare} onToggleSelect={onToggleSelect}
-            />
-          ))}
-        </div>
+      {articles.map((article, i) => (
+        <ArticleCard key={article.id} article={article} index={i} user={user}
+          isLiked={likedIds.has(article.id)} isBookmarked={bookmarkedIds.has(article.id)}
+          isSelected={selectedIds.has(article.id)}
+          onLike={onLike} onBookmark={onBookmark} onShare={onShare} onToggleSelect={onToggleSelect}
+        />
       ))}
     </div>
   );
@@ -866,13 +795,16 @@ function ListenView() {
   // Real audio playback
   const handlePlay = useCallback((ep) => {
     if (playing === ep.id) {
+      // Pause
       audioRef.current?.pause();
       setPlaying(null);
       return;
     }
+    // Stop current
     if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
 
     if (!ep.audio_url) {
+      // No audio URL — open the episode link instead
       if (ep.link) window.open(ep.link, "_blank");
       return;
     }
@@ -889,6 +821,7 @@ function ListenView() {
     });
     audio.addEventListener("ended", () => { setPlaying(null); setProgress(0); });
     audio.addEventListener("error", () => {
+      // Fallback: open in browser if audio won't play
       setPlaying(null);
       if (ep.link) window.open(ep.link, "_blank");
     });
@@ -898,10 +831,12 @@ function ListenView() {
     });
   }, [playing]);
 
+  // Cleanup audio on unmount
   useEffect(() => {
     return () => { if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; } };
   }, []);
 
+  // Search filter
   const filteredEpisodes = useMemo(() => {
     if (!searchQuery) return episodes;
     const q = searchQuery.toLowerCase();
@@ -913,6 +848,7 @@ function ListenView() {
     );
   }, [episodes, searchQuery]);
 
+  // Format seconds to mm:ss
   const fmtTime = (s) => {
     if (!s || isNaN(s)) return "0:00";
     const m = Math.floor(s / 60);
@@ -933,7 +869,7 @@ function ListenView() {
         </div>
       </div>
 
-      {/* Platform links */}
+      {/* Platform links — only show for TIC or All Shows */}
       {(!sourceFilter || sources.find(s => s.id === sourceFilter)?.name === "Talent Intelligence Collective Podcast") && (
         <div style={{ display: "flex", gap: 6, marginBottom: 14, justifyContent: "center" }}>
           {[
@@ -999,6 +935,7 @@ function ListenView() {
               </div>
             </div>
           </div>
+          {/* Progress bar */}
           <div style={{ height: 3, background: "#222", borderRadius: 2, overflow: "hidden", cursor: "pointer" }}
             onClick={(e) => {
               if (!audioRef.current || !duration) return;
@@ -1027,6 +964,7 @@ function ListenView() {
             const hasAudio = !!ep.audio_url;
             return (
               <div key={ep.id} style={{ background: "#111", borderRadius: 14, overflow: "hidden", border: `1px solid ${isPlay ? "#00e5a0" : "#222"}`, transition: "border-color 0.3s", animation: `cardIn 0.3s ease ${i * 0.03}s both` }}>
+                {/* Playing progress indicator */}
                 {isPlay && <div style={{ height: 2, background: "#222" }}><div style={{ height: "100%", width: `${progress}%`, background: "#00e5a0", transition: "width 0.3s linear" }} /></div>}
                 <div style={{ padding: "14px 16px" }}>
                   <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
@@ -1070,6 +1008,38 @@ function ListenView() {
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
+//  TRENDING TICKER — now dynamic
+// ═══════════════════════════════════════════════
+
+function TrendingTicker({ tags, onTagClick }) {
+  if (!tags || tags.length === 0) return null;
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: "10px", padding: "10px 14px",
+      marginBottom: "14px", background: "rgba(255,255,255,0.015)",
+      borderRadius: "14px", border: "1px solid #1a1a1a",
+      overflowX: "auto", scrollbarWidth: "none",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "5px", color: "#00e5a0", flexShrink: 0 }}>
+        <TrendingIcon />
+        <span style={{ fontSize: "10px", fontWeight: 800, letterSpacing: "1.2px" }}>TRENDING</span>
+      </div>
+      <div style={{ width: "1px", height: "14px", background: "#333", flexShrink: 0 }} />
+      {tags.map((t) => (
+        <button key={t.tag} onClick={() => onTagClick(t.tag.slice(1))} style={{
+          background: "none", border: "none", color: "#888",
+          fontSize: "11px", fontWeight: 600, whiteSpace: "nowrap",
+          padding: "3px 6px", borderRadius: "6px", transition: "all 0.2s",
+        }}
+          onMouseEnter={(e) => { e.currentTarget.style.color = "#00e5a0"; e.currentTarget.style.background = "rgba(0,229,160,0.08)"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.color = "#888"; e.currentTarget.style.background = "none"; }}
+        >{t.tag}</button>
+      ))}
     </div>
   );
 }
