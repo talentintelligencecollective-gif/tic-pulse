@@ -47,7 +47,7 @@ Write a natural, flowing narration based on these ${articles.length} articles.
 
 Rules:
 - Write for the ear, not the eye — use natural spoken language
-- Open with a brief welcome: "Welcome to your TIC Pulse intelligence briefing."
+- Open with a brief welcome: "Welcome to your Talent Intelligence Collective Pulse intelligence briefing."
 - Cover each article in 2-4 sentences: what happened and why it matters to talent professionals
 - Use smooth transitions between topics (e.g. "Moving on...", "Also making news...", "On the topic of...")
 - Keep a professional but warm tone — like a trusted colleague giving you a morning briefing
