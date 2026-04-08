@@ -5,9 +5,10 @@ import ArticleCard from "./ArticleCard.jsx";
 import ShareSheet from "./ShareSheet.jsx";
 import NewsletterBuilder from "./NewsletterBuilder.jsx";
 import AudioBriefing from "./AudioBriefing.jsx";
+import SettingsPage from "./SettingsPage.jsx";
 import Toast from "./Toast.jsx";
 import {
-  SearchIcon, CloseIcon, TrendingIcon, BookmarkIcon,
+  SearchIcon, CloseIcon, BookmarkIcon,
   FeedIcon, DiscoverIcon, PeopleIcon, NewsletterIcon,
 } from "./Icons.jsx";
 
@@ -115,14 +116,15 @@ function PulseApp({ session }) {
   const [selectedIds, setSelectedIds] = useState([]);
   const [showNewsletter, setShowNewsletter] = useState(false);
   const [showAudioBriefing, setShowAudioBriefing] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   // Server-side engagement (replaces localStorage)
   const [likedIds, setLikedIds] = useState(new Set());
   const [bookmarkedIds, setBookmarkedIds] = useState(new Set());
   const [engagementLoaded, setEngagementLoaded] = useState(false);
 
-  // Dynamic trending tags
-  const [trendingTags, setTrendingTags] = useState([]);
+  // Smart feed personalisation
+  const [userProfile, setUserProfile] = useState(null);
 
   const likedIdsRef = useRef(likedIds);
   useEffect(() => { likedIdsRef.current = likedIds; }, [likedIds]);
@@ -157,6 +159,85 @@ function PulseApp({ session }) {
     loadEngagement();
   }, [userId]);
 
+  // ─── Load or generate user intelligence profile ───
+  useEffect(() => {
+    if (!userId) return;
+    async function loadUserProfile() {
+      try {
+        // First try to load existing profile from Supabase (fast, no API call)
+        const { data: existing } = await supabase
+          .from("user_profiles")
+          .select("*")
+          .eq("user_id", userId)
+          .single();
+
+        if (existing) {
+          setUserProfile(existing);
+          // Silently regenerate in background if older than 90 days
+          const ageInDays = (Date.now() - new Date(existing.generated_at).getTime()) / (1000 * 60 * 60 * 24);
+          if (ageInDays >= 90) {
+            fetch("/.netlify/functions/generate-user-profile", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ userId, force: false }),
+            }).then(r => r.json()).then(data => {
+              if (data.success) setUserProfile(data.profile);
+            }).catch(() => {}); // Silent — don't surface errors for background refresh
+          }
+        } else {
+          // No profile yet — generate one in the background (fire-and-forget on first login)
+          fetch("/.netlify/functions/generate-user-profile", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ userId }),
+          }).then(r => r.json()).then(data => {
+            if (data.success) setUserProfile(data.profile);
+          }).catch(() => {}); // Silent — personalisation is additive, failure is graceful
+        }
+      } catch {
+        // Profile load failure is non-critical — feed still works without it
+      }
+    }
+    loadUserProfile();
+  }, [userId]);
+
+  // ─── Article scoring for personalised feed ───
+  function scoreArticle(article, profile) {
+    if (!profile) return 0;
+    let score = 0;
+    const text = `${article.title || ""} ${article.tldr || ""}`.toLowerCase();
+
+    // Industry match (+30)
+    if (profile.industry && (article.industry_tags || []).includes(profile.industry)) score += 30;
+
+    // Function match (+25)
+    if (profile.function && (article.function_tags || []).includes(profile.function)) score += 25;
+
+    // Company keyword match (+30) — user's own company mentioned
+    for (const kw of (profile.company_keywords || [])) {
+      if (kw && text.includes(kw.toLowerCase())) { score += 30; break; }
+    }
+
+    // Competitor keyword match (+15)
+    for (const kw of (profile.competitor_keywords || [])) {
+      if (kw && text.includes(kw.toLowerCase())) { score += 15; break; }
+    }
+
+    // Feed topic match (+10 each, max +20)
+    const articleTags = (article.tags || []).map(t => t.toLowerCase().replace(/^#/, "").replace(/_/g, ""));
+    let topicScore = 0;
+    for (const topic of (profile.feed_topics || [])) {
+      const topicClean = topic.toLowerCase().replace(/_/g, "");
+      if (articleTags.some(t => t.includes(topicClean) || topicClean.includes(t))) {
+        topicScore += 10;
+        if (topicScore >= 20) break;
+      }
+    }
+    score += topicScore;
+
+    return score;
+  }
+
   // ─── Data Loading ───
   const loadArticles = useCallback(async () => {
     setLoading(true);
@@ -174,58 +255,41 @@ function PulseApp({ session }) {
 
   useEffect(() => { loadArticles(); }, [loadArticles]);
 
-  // ─── Dynamic trending tags (from last 48h of articles) ───
-  useEffect(() => {
-    if (articles.length === 0) return;
-    const cutoff = Date.now() - 48 * 60 * 60 * 1000;
-    const tagCounts = {};
-
-    for (const a of articles) {
-      const pubDate = new Date(a.published_at || a.created_at).getTime();
-      if (pubDate < cutoff) continue;
-      for (const tag of (a.tags || [])) {
-        const clean = tag.replace(/^#/, "");
-        if (clean.length > 2) {
-          tagCounts[clean] = (tagCounts[clean] || 0) + 1;
-        }
-      }
-    }
-
-    const sorted = Object.entries(tagCounts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 6)
-      .map(([tag, count]) => ({ tag: `#${tag}`, count: String(count) }));
-
-    // Fallback if no tags found in recent articles
-    if (sorted.length === 0) {
-      setTrendingTags([]);
-    } else {
-      setTrendingTags(sorted);
-    }
-  }, [articles]);
-
-  // ─── Client-side filtering (7-day freshness) ───
+  // ─── Client-side filtering + personalised scoring (7-day freshness) ───
   const filteredArticles = useMemo(() => {
     const freshnessCutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
-    return articles
-      .filter((a) => {
-        const pubDate = new Date(a.published_at || a.created_at).getTime();
-        if (pubDate < freshnessCutoff) return false;
-        const matchesCategory = activeCategory === "All" || a.category === activeCategory;
-        if (!matchesCategory) return false;
-        if (searchQuery) {
-          const q = searchQuery.toLowerCase();
-          return (
-            (a.title || "").toLowerCase().includes(q) ||
-            (a.tldr || "").toLowerCase().includes(q) ||
-            (a.tags || []).some((t) => t.toLowerCase().includes(q)) ||
-            (a.category || "").toLowerCase().includes(q)
-          );
-        }
-        return true;
-      })
-      .sort((a, b) => new Date(b.published_at || b.created_at) - new Date(a.published_at || a.created_at));
-  }, [articles, activeCategory, searchQuery]);
+    const filtered = articles.filter((a) => {
+      const pubDate = new Date(a.published_at || a.created_at).getTime();
+      if (pubDate < freshnessCutoff) return false;
+      const matchesCategory = activeCategory === "All" || a.category === activeCategory;
+      if (!matchesCategory) return false;
+      if (searchQuery) {
+        const q = searchQuery.toLowerCase();
+        return (
+          (a.title || "").toLowerCase().includes(q) ||
+          (a.tldr || "").toLowerCase().includes(q) ||
+          (a.tags || []).some((t) => t.toLowerCase().includes(q)) ||
+          (a.category || "").toLowerCase().includes(q)
+        );
+      }
+      return true;
+    });
+
+    // Apply personalisation scoring if profile is loaded
+    if (userProfile) {
+      const scored = filtered.map(a => ({ ...a, _score: scoreArticle(a, userProfile) }));
+      return scored.sort((a, b) =>
+        b._score !== a._score
+          ? b._score - a._score
+          : new Date(b.published_at || b.created_at) - new Date(a.published_at || a.created_at)
+      );
+    }
+
+    // No profile yet — default recency sort
+    return filtered.sort((a, b) =>
+      new Date(b.published_at || b.created_at) - new Date(a.published_at || a.created_at)
+    );
+  }, [articles, activeCategory, searchQuery, userProfile]);
 
   useEffect(() => {
     if (searchOpen && searchInputRef.current) searchInputRef.current.focus();
@@ -241,7 +305,6 @@ function PulseApp({ session }) {
   const handleLike = useCallback((articleId) => {
     const wasLiked = likedIdsRef.current.has(articleId);
 
-    // Optimistic UI
     setLikedIds((prev) => {
       const next = new Set(prev);
       wasLiked ? next.delete(articleId) : next.add(articleId);
@@ -252,7 +315,6 @@ function PulseApp({ session }) {
       return { ...a, like_count: (a.like_count || 0) + (wasLiked ? -1 : 1) };
     }));
 
-    // Persist to Supabase
     incrementEngagement(articleId, "like_count", wasLiked ? -1 : 1);
     supabase.from("user_engagement").upsert({
       user_id: userId,
@@ -328,6 +390,7 @@ function PulseApp({ session }) {
         onToggleSearch={() => { setSearchOpen(!searchOpen); if (searchOpen) setSearchQuery(""); }}
         onSearchChange={setSearchQuery}
         onCategoryChange={(cat) => { setActiveCategory(cat); setSearchQuery(""); setSearchOpen(false); }}
+        onOpenSettings={() => setShowSettings(true)}
       />
 
       <main style={{ position: "relative", zIndex: 1 }}>
@@ -335,7 +398,7 @@ function PulseApp({ session }) {
           <FeedView
             articles={filteredArticles} loading={loading} error={error} searchQuery={searchQuery}
             likedIds={likedIds} bookmarkedIds={bookmarkedIds} selectedIds={selectedIdSet}
-            trendingTags={trendingTags} user={session?.user}
+            user={session?.user}
             onLike={handleLike} onBookmark={handleBookmark} onShare={handleShare}
             onToggleSelect={handleToggleSelect}
             onClearFilters={() => { setActiveCategory("All"); setSearchQuery(""); setSearchOpen(false); }}
@@ -390,6 +453,7 @@ function PulseApp({ session }) {
       <Toast message={toast.msg} visible={toast.show} />
       {showNewsletter && <NewsletterBuilder articles={selectedArticles} onClose={() => setShowNewsletter(false)} onToast={showToast} />}
       {showAudioBriefing && <AudioBriefing articles={selectedArticles} userId={userId} onClose={() => setShowAudioBriefing(false)} onToast={showToast} />}
+      {showSettings && <SettingsPage user={session?.user} onClose={() => setShowSettings(false)} onToast={showToast} onProfileUpdated={(p) => setUserProfile(p)} />}
     </div>
   );
 }
@@ -398,7 +462,7 @@ function PulseApp({ session }) {
 //  HEADER
 // ═══════════════════════════════════════════════
 
-function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user, activeTab, onLogout, onToggleSearch, onSearchChange, onCategoryChange }) {
+function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user, activeTab, onLogout, onToggleSearch, onSearchChange, onCategoryChange, onOpenSettings }) {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userInitials = user?.user_metadata?.full_name
     ? user.user_metadata.full_name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)
@@ -450,10 +514,18 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
                     <div style={{ fontSize: "13px", fontWeight: 600, color: "#eee" }}>{user?.user_metadata?.full_name || "User"}</div>
                     <div style={{ fontSize: "11px", color: "#888", marginTop: "2px" }}>{user?.email}</div>
                   </div>
+                  <button onClick={() => { setShowUserMenu(false); onOpenSettings(); }} style={{
+                    width: "100%", padding: "10px 12px", background: "none", border: "none",
+                    borderRadius: "8px", color: "#ccc", fontSize: "13px", fontWeight: 600,
+                    textAlign: "left", cursor: "pointer", marginTop: "4px", transition: "background 0.2s",
+                  }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = "rgba(255,255,255,0.05)"}
+                    onMouseLeave={(e) => e.currentTarget.style.background = "none"}
+                  >Settings</button>
                   <button onClick={() => { setShowUserMenu(false); onLogout(); }} style={{
                     width: "100%", padding: "10px 12px", background: "none", border: "none",
                     borderRadius: "8px", color: "#ff3b5c", fontSize: "13px", fontWeight: 600,
-                    textAlign: "left", cursor: "pointer", marginTop: "4px", transition: "background 0.2s",
+                    textAlign: "left", cursor: "pointer", marginTop: "2px", transition: "background 0.2s",
                   }}
                     onMouseEnter={(e) => e.currentTarget.style.background = "rgba(255,59,92,0.08)"}
                     onMouseLeave={(e) => e.currentTarget.style.background = "none"}
@@ -502,10 +574,10 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
 }
 
 // ═══════════════════════════════════════════════
-//  FEED VIEW — now with dynamic trending + user prop
+//  FEED VIEW
 // ═══════════════════════════════════════════════
 
-function FeedView({ articles, loading, error, searchQuery, likedIds, bookmarkedIds, selectedIds, trendingTags, user, onLike, onBookmark, onShare, onToggleSelect, onClearFilters, onSearchTag, onRetry }) {
+function FeedView({ articles, loading, error, searchQuery, likedIds, bookmarkedIds, selectedIds, user, onLike, onBookmark, onShare, onToggleSelect, onClearFilters, onSearchTag, onRetry }) {
   const hasSelections = selectedIds.size > 0;
   return (
     <div style={{ padding: hasSelections ? "12px 12px 180px" : "12px 12px 110px" }}>
@@ -579,7 +651,6 @@ function WatchView() {
     setLoading(true); load();
   }, [typeFilter]);
 
-  // Derive top topics from video tags
   const topTopics = useMemo(() => {
     const counts = {};
     for (const v of videos) {
@@ -594,7 +665,6 @@ function WatchView() {
       .map(([tag, count]) => ({ tag, count }));
   }, [videos]);
 
-  // Client-side search + topic filter
   const filteredVideos = useMemo(() => {
     return videos.filter(v => {
       if (topicFilter) {
@@ -650,7 +720,6 @@ function WatchView() {
 
   return (
     <div style={{ padding: "16px 12px 120px", animation: "fadeSlide 0.3s ease", background: "#000", minHeight: "calc(100vh - 120px)" }}>
-      {/* Search bar */}
       <div style={{ marginBottom: 12, padding: "0 4px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, background: "#111", borderRadius: 14, padding: "0 14px", border: "1px solid #333" }}>
           <span style={{ fontSize: 14, color: "#666" }}>⌕</span>
@@ -663,7 +732,6 @@ function WatchView() {
         </div>
       </div>
 
-      {/* Type filter pills */}
       <div style={{ display: "flex", gap: 6, marginBottom: 10, overflowX: "auto", scrollbarWidth: "none", padding: "0 4px" }}>
         {["all", "podcast", "video", "short", "panel", "event"].map(t => {
           const isActive = typeFilter === t;
@@ -678,7 +746,6 @@ function WatchView() {
         })}
       </div>
 
-      {/* Topic pills from tags */}
       {topTopics.length > 0 && (
         <div style={{ display: "flex", gap: 5, marginBottom: 14, overflowX: "auto", scrollbarWidth: "none", padding: "0 4px" }}>
           {topicFilter && (
@@ -703,7 +770,6 @@ function WatchView() {
         </div>
       )}
 
-      {/* Results count when filtering */}
       {(searchQuery || topicFilter) && !loading && (
         <div style={{ padding: "0 8px 10px", fontSize: 11, color: "#666" }}>
           {filteredVideos.length} video{filteredVideos.length !== 1 ? "s" : ""} found
@@ -791,19 +857,15 @@ function ListenView() {
     setLoading(true); load();
   }, [sourceFilter]);
 
-  // Real audio playback
   const handlePlay = useCallback((ep) => {
     if (playing === ep.id) {
-      // Pause
       audioRef.current?.pause();
       setPlaying(null);
       return;
     }
-    // Stop current
     if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
 
     if (!ep.audio_url) {
-      // No audio URL — open the episode link instead
       if (ep.link) window.open(ep.link, "_blank");
       return;
     }
@@ -820,7 +882,6 @@ function ListenView() {
     });
     audio.addEventListener("ended", () => { setPlaying(null); setProgress(0); });
     audio.addEventListener("error", () => {
-      // Fallback: open in browser if audio won't play
       setPlaying(null);
       if (ep.link) window.open(ep.link, "_blank");
     });
@@ -830,12 +891,10 @@ function ListenView() {
     });
   }, [playing]);
 
-  // Cleanup audio on unmount
   useEffect(() => {
     return () => { if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; } };
   }, []);
 
-  // Search filter
   const filteredEpisodes = useMemo(() => {
     if (!searchQuery) return episodes;
     const q = searchQuery.toLowerCase();
@@ -847,7 +906,6 @@ function ListenView() {
     );
   }, [episodes, searchQuery]);
 
-  // Format seconds to mm:ss
   const fmtTime = (s) => {
     if (!s || isNaN(s)) return "0:00";
     const m = Math.floor(s / 60);
@@ -857,7 +915,6 @@ function ListenView() {
 
   return (
     <div style={{ padding: "16px 12px 120px", animation: "fadeSlide 0.3s ease", background: "#000", minHeight: "calc(100vh - 120px)" }}>
-      {/* Header */}
       <div style={{ display: "flex", gap: 14, alignItems: "center", padding: "14px 16px", background: "#111", borderRadius: 16, border: "1px solid #222", marginBottom: 14 }}>
         <div style={{ width: 56, height: 56, borderRadius: 12, flexShrink: 0, background: "linear-gradient(135deg, rgba(0,229,160,0.1), rgba(0,180,216,0.1))", border: "1px solid rgba(0,229,160,0.2)", display: "flex", alignItems: "center", justifyContent: "center" }}>
           <img src="/tic-head.png" alt="TIC" style={{ width: 34, height: 34, objectFit: "contain" }} />
@@ -868,7 +925,6 @@ function ListenView() {
         </div>
       </div>
 
-      {/* Platform links — only show for TIC or All Shows */}
       {(!sourceFilter || sources.find(s => s.id === sourceFilter)?.name === "Talent Intelligence Collective Podcast") && (
         <div style={{ display: "flex", gap: 6, marginBottom: 14, justifyContent: "center" }}>
           {[
@@ -888,7 +944,6 @@ function ListenView() {
         </div>
       )}
 
-      {/* Search bar */}
       <div style={{ marginBottom: 12, padding: "0 4px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, background: "#111", borderRadius: 14, padding: "0 14px", border: "1px solid #333" }}>
           <span style={{ fontSize: 14, color: "#666" }}>⌕</span>
@@ -901,7 +956,6 @@ function ListenView() {
         </div>
       </div>
 
-      {/* Source filter */}
       {sources.length > 1 && (
         <div style={{ display: "flex", gap: 6, marginBottom: 14, overflowX: "auto", scrollbarWidth: "none", padding: "0 4px" }}>
           <button onClick={() => setSourceFilter(null)} style={{ padding: "5px 14px", borderRadius: 20, fontSize: 11, fontWeight: 700, background: !sourceFilter ? "rgba(0,229,160,0.12)" : "#111", color: !sourceFilter ? "#00e5a0" : "#888", border: `1px solid ${!sourceFilter ? "rgba(0,229,160,0.3)" : "#222"}`, whiteSpace: "nowrap" }}>All Shows</button>
@@ -912,7 +966,6 @@ function ListenView() {
         </div>
       )}
 
-      {/* Now Playing bar */}
       {playing && (
         <div style={{ marginBottom: 12, padding: "10px 14px", background: "#111", borderRadius: 12, border: "1px solid #00e5a0", animation: "fadeSlide 0.2s ease" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
@@ -934,7 +987,6 @@ function ListenView() {
               </div>
             </div>
           </div>
-          {/* Progress bar */}
           <div style={{ height: 3, background: "#222", borderRadius: 2, overflow: "hidden", cursor: "pointer" }}
             onClick={(e) => {
               if (!audioRef.current || !duration) return;
@@ -963,7 +1015,6 @@ function ListenView() {
             const hasAudio = !!ep.audio_url;
             return (
               <div key={ep.id} style={{ background: "#111", borderRadius: 14, overflow: "hidden", border: `1px solid ${isPlay ? "#00e5a0" : "#222"}`, transition: "border-color 0.3s", animation: `cardIn 0.3s ease ${i * 0.03}s both` }}>
-                {/* Playing progress indicator */}
                 {isPlay && <div style={{ height: 2, background: "#222" }}><div style={{ height: "100%", width: `${progress}%`, background: "#00e5a0", transition: "width 0.3s linear" }} /></div>}
                 <div style={{ padding: "14px 16px" }}>
                   <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
@@ -1007,38 +1058,6 @@ function ListenView() {
           })}
         </div>
       )}
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════
-//  TRENDING TICKER — now dynamic
-// ═══════════════════════════════════════════════
-
-function TrendingTicker({ tags, onTagClick }) {
-  if (!tags || tags.length === 0) return null;
-  return (
-    <div style={{
-      display: "flex", alignItems: "center", gap: "10px", padding: "10px 14px",
-      marginBottom: "14px", background: "rgba(255,255,255,0.015)",
-      borderRadius: "14px", border: "1px solid #1a1a1a",
-      overflowX: "auto", scrollbarWidth: "none",
-    }}>
-      <div style={{ display: "flex", alignItems: "center", gap: "5px", color: "#00e5a0", flexShrink: 0 }}>
-        <TrendingIcon />
-        <span style={{ fontSize: "10px", fontWeight: 800, letterSpacing: "1.2px" }}>TRENDING</span>
-      </div>
-      <div style={{ width: "1px", height: "14px", background: "#333", flexShrink: 0 }} />
-      {tags.map((t) => (
-        <button key={t.tag} onClick={() => onTagClick(t.tag.slice(1))} style={{
-          background: "none", border: "none", color: "#888",
-          fontSize: "11px", fontWeight: 600, whiteSpace: "nowrap",
-          padding: "3px 6px", borderRadius: "6px", transition: "all 0.2s",
-        }}
-          onMouseEnter={(e) => { e.currentTarget.style.color = "#00e5a0"; e.currentTarget.style.background = "rgba(0,229,160,0.08)"; }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = "#888"; e.currentTarget.style.background = "none"; }}
-        >{t.tag}</button>
-      ))}
     </div>
   );
 }
