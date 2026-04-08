@@ -3,6 +3,12 @@
   publish = "dist"
   functions = "netlify/functions"
 
+# SPA fallback — serve index.html for all routes
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
 # Environment variable context
 [context.production.environment]
   NODE_VERSION = "20"
@@ -10,28 +16,15 @@
 [context.deploy-preview.environment]
   NODE_VERSION = "20"
 
-# Scheduled function: drip-feed every 5 minutes (v3)
+# Scheduled function: fetch GDELT articles every 30 minutes
 [functions."fetch-gdelt"]
-  schedule = "*/5 * * * *"
+  schedule = "*/30 * * * *"
 
-# ─── Redirects ───
-# IMPORTANT: Order matters — first match wins
-# Netlify serves static files from publish dir BEFORE redirects,
-# so manifest.json, sw.js, icons/* are served directly if they exist.
+# Scheduled function: clean up expired audio briefings daily at 03:00 UTC
+[functions."cleanup-audio"]
+  schedule = "0 3 * * *"
 
-# Serve .well-known files directly (Digital Asset Links for Play Store)
-[[redirects]]
-  from = "/.well-known/*"
-  to = "/.well-known/:splat"
-  status = 200
-
-# SPA fallback — serve index.html for all other routes
-[[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200
-
-# ─── Headers ───
+# Headers for security and caching
 [[headers]]
   for = "/*"
   [headers.values]
@@ -43,24 +36,3 @@
   for = "/assets/*"
   [headers.values]
     Cache-Control = "public, max-age=31536000, immutable"
-
-# Serve manifest and sw with correct content types
-[[headers]]
-  for = "/manifest.json"
-  [headers.values]
-    Content-Type = "application/json"
-    Cache-Control = "no-cache"
-
-[[headers]]
-  for = "/sw.js"
-  [headers.values]
-    Content-Type = "application/javascript"
-    Cache-Control = "no-cache"
-    Service-Worker-Allowed = "/"
-
-# Serve assetlinks.json with correct content type
-[[headers]]
-  for = "/.well-known/assetlinks.json"
-  [headers.values]
-    Content-Type = "application/json"
-    Cache-Control = "public, max-age=3600"
