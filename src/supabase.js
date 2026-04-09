@@ -13,8 +13,14 @@ if (!supabaseUrl || !supabaseAnonKey) {
 
 export const supabase = createClient(supabaseUrl || "", supabaseAnonKey || "");
 
-// ─── Article Queries ───
+// ═══════════════════════════════════════════════
+//  ARTICLE QUERIES
+// ═══════════════════════════════════════════════
 
+/**
+ * Fetch articles from the articles_feed view.
+ * Returns articles sorted by created_at DESC.
+ */
 export async function fetchArticles({ category, search, limit = 30, offset = 0 } = {}) {
   let query = supabase
     .from("articles_feed")
@@ -40,6 +46,9 @@ export async function fetchArticles({ category, search, limit = 30, offset = 0 }
   return data || [];
 }
 
+/**
+ * Increment an engagement counter atomically.
+ */
 export async function incrementEngagement(articleId, field, delta = 1) {
   const { error } = await supabase.rpc("increment_engagement", {
     p_article_id: articleId,
@@ -52,6 +61,9 @@ export async function incrementEngagement(articleId, field, delta = 1) {
   }
 }
 
+/**
+ * Fetch top categories by article count.
+ */
 export async function fetchCategoryCounts() {
   const { data, error } = await supabase
     .from("articles_feed")
@@ -71,7 +83,7 @@ export async function fetchCategoryCounts() {
 // ═══════════════════════════════════════════════
 
 /**
- * Fetch a user's profile (full_name, company, job_title).
+ * Fetch a user's profile from the profiles table.
  */
 export async function fetchUserProfile(userId) {
   if (!userId) return null;
@@ -89,8 +101,7 @@ export async function fetchUserProfile(userId) {
 }
 
 /**
- * Update a user's profile and auth metadata.
- * Returns true on success.
+ * Update a user's profile (profiles table + auth metadata).
  */
 export async function updateUserProfile(userId, { fullName, company, jobTitle }) {
   if (!userId) return false;
@@ -109,8 +120,14 @@ export async function updateUserProfile(userId, { fullName, company, jobTitle })
       return false;
     }
 
-    // Keep auth metadata in sync so full_name is used in comments
-    await supabase.auth.updateUser({ data: { full_name: fullName } });
+    // Update auth metadata (for full_name used in comments etc.)
+    const { error: authErr } = await supabase.auth.updateUser({
+      data: { full_name: fullName },
+    });
+
+    if (authErr) {
+      console.error("Auth metadata update error:", authErr.message);
+    }
 
     return true;
   } catch (e) {
@@ -123,7 +140,7 @@ export async function updateUserProfile(userId, { fullName, company, jobTitle })
 //  USER STREAKS & BADGES
 // ═══════════════════════════════════════════════
 
-export const STREAK_TIERS = [
+const STREAK_TIERS = [
   { min: 500, label: "Legend",     icon: "⭐", color: "#ffd700" },
   { min: 300, label: "Champion",   icon: "🏆", color: "#f59e0b" },
   { min: 100, label: "Centurion",  icon: "👑", color: "#a855f7" },
@@ -133,26 +150,33 @@ export const STREAK_TIERS = [
   { min:   0, label: "New Member", icon: "🌱", color: "#888888" },
 ];
 
-export const ENGAGEMENT_BADGES = [
-  { field: "total_comments",    min: 10, label: "Commenter",  icon: "💬" },
-  { field: "total_likes",       min: 50, label: "Supporter",  icon: "❤️"  },
-  { field: "total_newsletters", min: 5,  label: "Curator",    icon: "📰" },
-  { field: "total_shares",      min: 20, label: "Amplifier",  icon: "📡" },
-  { field: "total_bookmarks",   min: 30, label: "Collector",  icon: "📚" },
+const ENGAGEMENT_BADGES = [
+  { field: "total_likes",       min: 10,  icon: "❤️",  label: "Heart Giver" },
+  { field: "total_likes",       min: 100, icon: "💖",  label: "Love Machine" },
+  { field: "total_comments",    min: 5,   icon: "💬",  label: "Conversationalist" },
+  { field: "total_comments",    min: 50,  icon: "🎤",  label: "Commentator" },
+  { field: "total_shares",      min: 5,   icon: "📤",  label: "Sharer" },
+  { field: "total_shares",      min: 50,  icon: "📡",  label: "Broadcaster" },
+  { field: "total_bookmarks",   min: 10,  icon: "📚",  label: "Collector" },
+  { field: "total_bookmarks",   min: 100, icon: "🏛️",  label: "Librarian" },
+  { field: "total_newsletters", min: 1,   icon: "📰",  label: "Newsletter Maker" },
+  { field: "total_newsletters", min: 10,  icon: "✍️",  label: "Editor in Chief" },
+  { field: "total_active_days", min: 30,  icon: "📅",  label: "Monthly Regular" },
+  { field: "total_active_days", min: 365, icon: "🎂",  label: "One Year Club" },
 ];
 
 /**
- * Get the streak tier object for a given streak count.
+ * Get the streak tier for a given streak count.
  */
 export function getStreakTier(streakCount) {
   for (const tier of STREAK_TIERS) {
-    if ((streakCount || 0) >= tier.min) return tier;
+    if (streakCount >= tier.min) return tier;
   }
   return STREAK_TIERS[STREAK_TIERS.length - 1];
 }
 
 /**
- * Get earned engagement badges from a streak data row.
+ * Get earned engagement badges from streak data.
  */
 export function getEarnedBadges(streakData) {
   if (!streakData) return [];
@@ -160,7 +184,8 @@ export function getEarnedBadges(streakData) {
 }
 
 /**
- * Call on app open — updates the streak server-side and returns the row.
+ * Update the user's streak on app open.
+ * Returns the full streak data including counters.
  */
 export async function updateStreak(userId) {
   if (!userId) return null;
@@ -179,8 +204,7 @@ export async function updateStreak(userId) {
 }
 
 /**
- * Increment an engagement counter on the streak row.
- * field: total_likes | total_comments | total_shares | total_bookmarks | total_newsletters
+ * Increment a streak engagement counter.
  */
 export async function incrementStreakCounter(userId, field, delta = 1) {
   if (!userId) return;
@@ -194,7 +218,7 @@ export async function incrementStreakCounter(userId, field, delta = 1) {
 }
 
 /**
- * Fetch another user's streak data (used for comment badges).
+ * Fetch another user's streak data (for comment badges).
  */
 export async function fetchUserStreak(userId) {
   if (!userId) return null;
