@@ -1,9 +1,7 @@
-import { useState, useRef, useEffect, useMemo, useCallback } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { generateNewsletterHtml, NEWSLETTER_THEMES } from "./emailTemplate.js";
-import { lookupBrandGuidelines, saveBrandGuidelines, loadNewsletterPrefs, saveNewsletterPrefs, fetchUserProfile } from "./supabase.js";
 
 // ─── Theme Swatch ───
-
 function ThemeSwatch({ theme, isActive, onClick }) {
   return (
     <button onClick={onClick} style={{
@@ -27,7 +25,6 @@ function ThemeSwatch({ theme, isActive, onClick }) {
 }
 
 // ─── Color Picker Row ───
-
 function ColorRow({ label, value, onChange }) {
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0" }}>
@@ -41,15 +38,43 @@ function ColorRow({ label, value, onChange }) {
   );
 }
 
-// ─── Inline content type helpers ───
+// ─── Content item row (article, video, or episode) ───
+function ContentRow({ item, index, type }) {
+  const typeIcon = type === "video" ? "▶" : type === "episode" ? "🎧" : "📄";
+  const subtitle = type === "video"
+    ? (item.channel_title || "YouTube")
+    : type === "episode"
+    ? (item.sources?.name || "Podcast")
+    : (item.source_name || item.category || "");
 
-const videoTypeLabel = (t) => ({ podcast: "Podcast", event: "Event", panel: "Panel", short: "Short", video: "Video" }[t] || "Video");
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: "10px", padding: "10px 12px",
+      background: "#111", borderRadius: "10px", border: "1px solid #222", marginBottom: "6px",
+    }}>
+      <span style={{ fontSize: "12px", fontWeight: 800, color: "#444", width: "18px" }}>{index + 1}</span>
+      <div style={{
+        width: "24px", height: "24px", borderRadius: "6px", flexShrink: 0,
+        background: type === "video" ? "rgba(255,107,53,0.12)" : type === "episode" ? "rgba(0,229,160,0.1)" : "rgba(0,180,216,0.1)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        fontSize: "11px",
+      }}>{typeIcon}</div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{
+          fontSize: "12px", fontWeight: 600, color: "#ddd",
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+        }}>{item.title}</div>
+        <div style={{ fontSize: "10px", color: "#666" }}>{subtitle}</div>
+      </div>
+    </div>
+  );
+}
 
 // ═══════════════════════════════════════════════
 //  NEWSLETTER BUILDER
 // ═══════════════════════════════════════════════
 
-export default function NewsletterBuilder({ articles = [], videos = [], episodes = [], userId, onClose, onToast }) {
+export default function NewsletterBuilder({ articles = [], videos = [], episodes = [], onClose, onToast }) {
   const [activeThemeId, setActiveThemeId] = useState("pulse");
   const [customColors, setCustomColors] = useState({ ...NEWSLETTER_THEMES.custom });
   const [title, setTitle] = useState("Talent Intelligence Briefing");
@@ -58,141 +83,7 @@ export default function NewsletterBuilder({ articles = [], videos = [], episodes
   const [activePanel, setActivePanel] = useState("theme");
   const [copied, setCopied] = useState(false);
 
-  // Brand lookup state
-  const [companyName, setCompanyName] = useState("");
-  const [brandLookupState, setBrandLookupState] = useState("idle"); // idle | searching | found | notfound
-  const [brandData, setBrandData] = useState(null);
-  const [autoDetectedCompany, setAutoDetectedCompany] = useState(false); // true if company came from user profile
-  const lookupTimerRef = useRef(null);
-
-  // Prefs loaded flag
-  const [prefsLoaded, setPrefsLoaded] = useState(false);
-
   const previewRef = useRef(null);
-
-  const DEFAULT_INTRO = "Good morning — here are this week's key talent intelligence stories worth your attention.";
-
-  // ─── Auto-run brand lookup (used on mount and on manual change) ───
-  const runBrandLookup = useCallback(async (name) => {
-    if (!name || name.trim().length < 2) {
-      setBrandLookupState("idle");
-      setBrandData(null);
-      return;
-    }
-    setBrandLookupState("searching");
-    const result = await lookupBrandGuidelines(name);
-    if (result) {
-      setBrandLookupState("found");
-      setBrandData(result);
-      setCustomColors((prev) => ({
-        ...prev,
-        accent: result.color_primary || prev.accent,
-        headerBg: result.color_header_bg || prev.headerBg,
-        bg: result.color_body_bg || prev.bg,
-        cardBg: result.color_card_bg || prev.cardBg,
-        textPrimary: result.color_text_primary || prev.textPrimary,
-        textSecondary: result.color_text_secondary || prev.textSecondary,
-      }));
-      setActiveThemeId("custom");
-    } else {
-      setBrandLookupState("notfound");
-      setBrandData(null);
-    }
-  }, []);
-
-  // ─── Load profile + saved prefs on mount ───
-  useEffect(() => {
-    if (!userId) { setPrefsLoaded(true); return; }
-
-    async function init() {
-      // Load saved prefs and user profile in parallel
-      const [prefs, profile] = await Promise.all([
-        loadNewsletterPrefs(userId),
-        fetchUserProfile(userId),
-      ]);
-
-      // Start with profile defaults, then override with saved prefs
-      const profileName = profile?.full_name || "";
-      const profileCompany = profile?.company || "";
-
-      // Sender name: saved pref > profile name
-      setSenderName(prefs?.senderName || profileName);
-
-      // Company: saved pref > profile company
-      const resolvedCompany = prefs?.companyName || profileCompany;
-      setCompanyName(resolvedCompany);
-
-      // Track if company was auto-detected from profile
-      if (profileCompany && (!prefs?.companyName || prefs.companyName === profileCompany)) {
-        setAutoDetectedCompany(true);
-      }
-
-      // Intro: saved pref > default
-      setIntroText(prefs?.introText || DEFAULT_INTRO);
-
-      // Theme/colors: saved pref > defaults
-      if (prefs?.themeId) setActiveThemeId(prefs.themeId);
-      if (prefs?.customColors) setCustomColors(prefs.customColors);
-      if (prefs?.title) setTitle(prefs.title);
-
-      setPrefsLoaded(true);
-
-      // Auto-trigger brand lookup if we have a company name and no saved custom colors
-      if (resolvedCompany && !prefs?.customColors) {
-        runBrandLookup(resolvedCompany);
-      }
-    }
-
-    init();
-  }, [userId, runBrandLookup]);
-
-  // ─── Save preferences when they change (debounced) ───
-  const saveTimerRef = useRef(null);
-  useEffect(() => {
-    if (!userId || !prefsLoaded) return;
-    clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
-      saveNewsletterPrefs(userId, {
-        senderName,
-        companyName,
-        introText,
-        themeId: activeThemeId,
-        customColors,
-        title,
-      });
-    }, 1500);
-    return () => clearTimeout(saveTimerRef.current);
-  }, [userId, senderName, companyName, introText, activeThemeId, customColors, title, prefsLoaded]);
-
-  // ─── Brand lookup with debounce (manual typing) ───
-  const handleCompanyNameChange = useCallback((name) => {
-    setCompanyName(name);
-    setAutoDetectedCompany(false); // User is manually changing
-    clearTimeout(lookupTimerRef.current);
-
-    if (!name || name.trim().length < 2) {
-      setBrandLookupState("idle");
-      setBrandData(null);
-      return;
-    }
-
-    setBrandLookupState("searching");
-    lookupTimerRef.current = setTimeout(() => runBrandLookup(name), 600);
-  }, [runBrandLookup]);
-
-  // ─── Save custom brand colours back to Supabase ───
-  const handleSaveBrandColors = useCallback(async () => {
-    if (!companyName || companyName.trim().length < 2) return;
-    const result = await saveBrandGuidelines({
-      companyName,
-      colors: customColors,
-    });
-    if (result) {
-      onToast(`${companyName} brand colours saved`);
-    } else {
-      onToast("Couldn't save brand colours — check permissions");
-    }
-  }, [companyName, customColors, onToast]);
 
   const activeTheme = useMemo(() => {
     if (activeThemeId === "custom") return { ...customColors, id: "custom" };
@@ -200,10 +91,7 @@ export default function NewsletterBuilder({ articles = [], videos = [], episodes
   }, [activeThemeId, customColors]);
 
   const html = useMemo(() => {
-    return generateNewsletterHtml({
-      articles, videos, episodes,
-      theme: activeTheme, introText, senderName, newsletterTitle: title,
-    });
+    return generateNewsletterHtml({ articles, videos, episodes, theme: activeTheme, introText, senderName, newsletterTitle: title });
   }, [articles, videos, episodes, activeTheme, introText, senderName, title]);
 
   useEffect(() => {
@@ -212,6 +100,8 @@ export default function NewsletterBuilder({ articles = [], videos = [], episodes
       if (doc) { doc.open(); doc.write(html); doc.close(); }
     }
   }, [html, activePanel]);
+
+  const totalItems = articles.length + videos.length + episodes.length;
 
   const handleCopyHtml = async () => {
     try {
@@ -258,13 +148,10 @@ export default function NewsletterBuilder({ articles = [], videos = [], episodes
   };
 
   const themeList = Object.values(NEWSLETTER_THEMES);
-  const totalItems = articles.length + videos.length + episodes.length;
-
   const inputStyle = {
     width: "100%", padding: "12px 14px", borderRadius: "12px",
     border: "1px solid #333", background: "#111", color: "#eee",
-    fontSize: "14px", outline: "none", fontFamily: "'DM Sans', sans-serif",
-    boxSizing: "border-box",
+    fontSize: "14px", outline: "none", fontFamily: "inherit",
   };
 
   return (
@@ -275,10 +162,8 @@ export default function NewsletterBuilder({ articles = [], videos = [], episodes
       <style>{`
         @keyframes nbFade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
         .nb-anim { animation: nbFade 0.2s ease; }
-        .nb-input { box-sizing: border-box; }
         .nb-input::placeholder { color: #555; }
         .nb-input:focus { border-color: #00e5a0 !important; }
-        @keyframes nbPulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
       `}</style>
 
       {/* ── Header ── */}
@@ -296,7 +181,7 @@ export default function NewsletterBuilder({ articles = [], videos = [], episodes
             {totalItems} item{totalItems !== 1 ? "s" : ""}
             {articles.length > 0 && ` · ${articles.length} article${articles.length !== 1 ? "s" : ""}`}
             {videos.length > 0 && ` · ${videos.length} video${videos.length !== 1 ? "s" : ""}`}
-            {episodes.length > 0 && ` · ${episodes.length} episode${episodes.length !== 1 ? "s" : ""}`}
+            {episodes.length > 0 && ` · ${episodes.length} podcast${episodes.length !== 1 ? "s" : ""}`}
           </div>
         </div>
         <div style={{ width: "30px" }} />
@@ -312,9 +197,9 @@ export default function NewsletterBuilder({ articles = [], videos = [], episodes
         ].map((tab) => (
           <button key={tab.id} onClick={() => setActivePanel(tab.id)} style={{
             flex: 1, padding: "8px", borderRadius: "10px", border: "none",
-            fontSize: "12px", fontWeight: 700,
-            background: activePanel === tab.id ? "rgba(0,229,160,0.12)" : "transparent",
-            color: activePanel === tab.id ? "#00e5a0" : "#666",
+            background: activePanel === tab.id ? "#1a1a1e" : "none",
+            color: activePanel === tab.id ? "#fff" : "#666",
+            fontSize: "12px", fontWeight: 600, cursor: "pointer",
           }}>{tab.label}</button>
         ))}
       </div>
@@ -335,82 +220,13 @@ export default function NewsletterBuilder({ articles = [], videos = [], episodes
                   onClick={() => setActiveThemeId(theme.id)} />
               ))}
             </div>
-
-            {/* ── Brand Lookup (shown when Custom is selected) ── */}
             {activeThemeId === "custom" && (
               <div className="nb-anim" style={{
                 marginTop: "20px", padding: "16px", background: "#111",
                 borderRadius: "14px", border: "1px solid #333",
               }}>
-                {/* Auto-detection banner — shown when company came from profile */}
-                {autoDetectedCompany && brandLookupState === "found" && brandData && (
-                  <div style={{
-                    marginBottom: "16px", padding: "12px 14px", borderRadius: "10px",
-                    background: "linear-gradient(135deg, rgba(0,229,160,0.08), rgba(0,180,216,0.06))",
-                    border: "1px solid rgba(0,229,160,0.2)",
-                  }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
-                      <span style={{ fontSize: "16px" }}>🏢</span>
-                      <span style={{ fontSize: "13px", fontWeight: 700, color: "#00e5a0" }}>
-                        {brandData.company_name} brand detected
-                      </span>
-                    </div>
-                    <div style={{ fontSize: "11px", color: "#888", lineHeight: 1.5 }}>
-                      We matched your company from your profile and applied {brandData.company_name}'s brand colours automatically. You can adjust them below.
-                    </div>
-                  </div>
-                )}
-
-                {/* Company Name Input */}
-                <div style={{ marginBottom: "16px" }}>
-                  <label style={{ display: "block", fontSize: "11px", fontWeight: 700, color: "#888", letterSpacing: "0.8px", marginBottom: "6px" }}>
-                    COMPANY NAME
-                  </label>
-                  <div style={{ position: "relative", overflow: "hidden" }}>
-                    <input
-                      className="nb-input"
-                      value={companyName}
-                      onChange={(e) => handleCompanyNameChange(e.target.value)}
-                      placeholder="Type to auto-detect brand colours…"
-                      style={{ ...inputStyle, paddingRight: "36px" }}
-                    />
-                    {/* Status indicator */}
-                    <div style={{ position: "absolute", right: "14px", top: "50%", transform: "translateY(-50%)" }}>
-                      {brandLookupState === "searching" && (
-                        <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#f59e0b", animation: "nbPulse 1s ease infinite" }} />
-                      )}
-                      {brandLookupState === "found" && (
-                        <span style={{ fontSize: "14px" }}>✓</span>
-                      )}
-                      {brandLookupState === "notfound" && (
-                        <span style={{ fontSize: "11px", color: "#666" }}>—</span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Brand match feedback (manual search only) */}
-                  {!autoDetectedCompany && brandLookupState === "found" && brandData && (
-                    <div style={{
-                      marginTop: "8px", padding: "8px 12px", borderRadius: "8px",
-                      background: "rgba(0,229,160,0.06)", border: "1px solid rgba(0,229,160,0.15)",
-                    }}>
-                      <div style={{ fontSize: "12px", color: "#00e5a0", fontWeight: 600 }}>
-                        ✓ Matched: {brandData.company_name}
-                      </div>
-                      <div style={{ fontSize: "10px", color: "#666", marginTop: "2px" }}>
-                        {brandData.industry} · Brand colours applied below
-                      </div>
-                    </div>
-                  )}
-                  {brandLookupState === "notfound" && (
-                    <div style={{ marginTop: "6px", fontSize: "11px", color: "#666" }}>
-                      No brand colours found — set them manually below and save
-                    </div>
-                  )}
-                </div>
-
                 <div style={{ fontSize: "13px", fontWeight: 700, color: "#eee", marginBottom: "8px" }}>
-                  Brand Colours
+                  Custom Brand Colours
                 </div>
                 <ColorRow label="Accent" value={customColors.accent}
                   onChange={(v) => setCustomColors((p) => ({ ...p, accent: v }))} />
@@ -422,21 +238,6 @@ export default function NewsletterBuilder({ articles = [], videos = [], episodes
                   onChange={(v) => setCustomColors((p) => ({ ...p, cardBg: v }))} />
                 <ColorRow label="Text" value={customColors.textPrimary}
                   onChange={(v) => setCustomColors((p) => ({ ...p, textPrimary: v }))} />
-
-                {/* Save brand colours button */}
-                {companyName.trim().length >= 2 && (
-                  <button onClick={handleSaveBrandColors} style={{
-                    width: "100%", marginTop: "14px", padding: "10px", borderRadius: "10px",
-                    border: "1px solid #333", background: "#1a1a1e", color: "#ccc",
-                    fontSize: "12px", fontWeight: 600, cursor: "pointer",
-                    transition: "all 0.2s",
-                  }}
-                    onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#00e5a0"; e.currentTarget.style.color = "#00e5a0"; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#333"; e.currentTarget.style.color = "#ccc"; }}
-                  >
-                    {brandLookupState === "found" ? `Update ${brandData?.company_name} colours` : `Save ${companyName.trim()} colours`}
-                  </button>
-                )}
               </div>
             )}
           </div>
@@ -460,7 +261,7 @@ export default function NewsletterBuilder({ articles = [], videos = [], episodes
                 Optional opening paragraph for your audience
               </p>
               <textarea className="nb-input" value={introText} onChange={(e) => setIntroText(e.target.value)}
-                placeholder="Add a personal introduction for your audience…"
+                placeholder="Good morning team — here are this week's key talent intelligence stories..."
                 rows={4} style={{ ...inputStyle, resize: "vertical", lineHeight: 1.6 }} />
             </div>
             <div style={{ marginBottom: "18px" }}>
@@ -471,84 +272,41 @@ export default function NewsletterBuilder({ articles = [], videos = [], episodes
                 placeholder="Appears as 'Curated by...'" style={inputStyle} />
             </div>
 
-            {/* ── Articles ── */}
-            {articles.length > 0 && (
-              <div style={{ marginBottom: "18px" }}>
-                <label style={{ display: "block", fontSize: "11px", fontWeight: 700, color: "#888", letterSpacing: "0.8px", marginBottom: "6px" }}>
-                  📰 ARTICLES ({articles.length})
-                </label>
-                {articles.map((a, i) => (
-                  <div key={a.id} style={{
-                    display: "flex", alignItems: "center", gap: "10px", padding: "10px 12px",
-                    background: "#111", borderRadius: "10px", border: "1px solid #222", marginBottom: "6px",
-                  }}>
-                    <span style={{ fontSize: "12px", fontWeight: 800, color: "#444", width: "18px" }}>{i + 1}</span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{
-                        fontSize: "12px", fontWeight: 600, color: "#ddd",
-                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                      }}>{a.title}</div>
-                      <div style={{ fontSize: "10px", color: "#666" }}>{a.source_name} · {a.category}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+            {/* Content order */}
+            <div>
+              <label style={{ display: "block", fontSize: "11px", fontWeight: 700, color: "#888", letterSpacing: "0.8px", marginBottom: "6px" }}>
+                CONTENT ({totalItems} items)
+              </label>
 
-            {/* ── Videos ── */}
-            {videos.length > 0 && (
-              <div style={{ marginBottom: "18px" }}>
-                <label style={{ display: "block", fontSize: "11px", fontWeight: 700, color: "#888", letterSpacing: "0.8px", marginBottom: "6px" }}>
-                  ▶ VIDEOS ({videos.length})
-                </label>
-                {videos.map((v, i) => (
-                  <div key={v.id} style={{
-                    display: "flex", alignItems: "center", gap: "10px", padding: "10px 12px",
-                    background: "#111", borderRadius: "10px", border: "1px solid #222", marginBottom: "6px",
-                  }}>
-                    <span style={{ fontSize: "12px", fontWeight: 800, color: "#444", width: "18px" }}>{i + 1}</span>
-                    {v.youtube_id && (
-                      <div style={{
-                        width: "48px", height: "27px", borderRadius: "4px", flexShrink: 0,
-                        backgroundImage: `url(https://img.youtube.com/vi/${v.youtube_id}/default.jpg)`,
-                        backgroundSize: "cover", backgroundPosition: "center",
-                      }} />
-                    )}
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{
-                        fontSize: "12px", fontWeight: 600, color: "#ddd",
-                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                      }}>{v.title}</div>
-                      <div style={{ fontSize: "10px", color: "#666" }}>{v.channel_title} · {videoTypeLabel(v.video_type)}</div>
+              {articles.length > 0 && (
+                <>
+                  {(videos.length > 0 || episodes.length > 0) && (
+                    <div style={{ fontSize: "10px", fontWeight: 700, color: "#555", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "6px", marginTop: "4px" }}>
+                      Articles
                     </div>
-                  </div>
-                ))}
-              </div>
-            )}
+                  )}
+                  {articles.map((a, i) => <ContentRow key={a.id} item={a} index={i} type="article" />)}
+                </>
+              )}
 
-            {/* ── Podcasts ── */}
-            {episodes.length > 0 && (
-              <div style={{ marginBottom: "18px" }}>
-                <label style={{ display: "block", fontSize: "11px", fontWeight: 700, color: "#888", letterSpacing: "0.8px", marginBottom: "6px" }}>
-                  🎧 PODCASTS ({episodes.length})
-                </label>
-                {episodes.map((ep, i) => (
-                  <div key={ep.id} style={{
-                    display: "flex", alignItems: "center", gap: "10px", padding: "10px 12px",
-                    background: "#111", borderRadius: "10px", border: "1px solid #222", marginBottom: "6px",
-                  }}>
-                    <span style={{ fontSize: "12px", fontWeight: 800, color: "#444", width: "18px" }}>{i + 1}</span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{
-                        fontSize: "12px", fontWeight: 600, color: "#ddd",
-                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                      }}>{ep.title}</div>
-                      <div style={{ fontSize: "10px", color: "#666" }}>{ep.sources?.name || "Podcast"}{ep.duration ? ` · ${ep.duration}` : ""}</div>
-                    </div>
+              {videos.length > 0 && (
+                <>
+                  <div style={{ fontSize: "10px", fontWeight: 700, color: "#555", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "6px", marginTop: articles.length > 0 ? "12px" : "4px" }}>
+                    Videos
                   </div>
-                ))}
-              </div>
-            )}
+                  {videos.map((v, i) => <ContentRow key={v.id} item={v} index={i} type="video" />)}
+                </>
+              )}
+
+              {episodes.length > 0 && (
+                <>
+                  <div style={{ fontSize: "10px", fontWeight: 700, color: "#555", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "6px", marginTop: (articles.length > 0 || videos.length > 0) ? "12px" : "4px" }}>
+                    Podcasts
+                  </div>
+                  {episodes.map((e, i) => <ContentRow key={e.id} item={e} index={i} type="episode" />)}
+                </>
+              )}
+            </div>
           </div>
         )}
 
@@ -572,15 +330,14 @@ export default function NewsletterBuilder({ articles = [], videos = [], episodes
               Choose how to share your briefing
             </p>
 
-            {/* Download options */}
             <div style={{ fontSize: "11px", fontWeight: 700, color: "#888", letterSpacing: "0.8px", marginBottom: "10px" }}>
               DOWNLOAD
             </div>
             {[
               { label: "Download HTML", desc: "Email-ready HTML file. Paste into your email tool's HTML editor.", icon: "📄", onClick: handleDownloadHtml },
               { label: "Save as PDF", desc: "Opens print dialog — choose 'Save as PDF'.", icon: "📑", onClick: handlePrintPdf },
-              { label: "PowerPoint", desc: "Coming soon", icon: "📊", disabled: true },
-              { label: "Word Document", desc: "Coming soon", icon: "📝", disabled: true },
+              { label: "PowerPoint", desc: "Coming in Phase 2", icon: "📊", disabled: true },
+              { label: "Word Document", desc: "Coming in Phase 2", icon: "📝", disabled: true },
             ].map((opt) => (
               <button key={opt.label} onClick={opt.disabled ? undefined : opt.onClick} style={{
                 width: "100%", display: "flex", alignItems: "center", gap: "14px",
@@ -596,7 +353,6 @@ export default function NewsletterBuilder({ articles = [], videos = [], episodes
               </button>
             ))}
 
-            {/* Share options */}
             <div style={{ fontSize: "11px", fontWeight: 700, color: "#888", letterSpacing: "0.8px", margin: "24px 0 10px" }}>
               SHARE
             </div>
