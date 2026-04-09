@@ -7,57 +7,37 @@
 // ═══════════════════════════════════════════════════════════════
 
 import { useState, useEffect } from "react";
-import { supabase } from "./supabase.js";
+import { supabase, getStreakTier, getEarnedBadges } from "./supabase.js";
 
-const FUNCTION_LABELS = {
-  talent_acquisition: "Talent Acquisition",
-  people_analytics: "People Analytics",
-  hr_ops: "HR Operations",
-  learning_dev: "Learning & Development",
-  compensation: "Compensation & Rewards",
-  executive: "Executive / C-Suite",
-};
-
-const INDUSTRY_LABELS = {
-  tech: "Technology",
-  finance: "Financial Services",
-  healthcare: "Healthcare",
-  retail: "Retail",
-  fmcg: "FMCG / Consumer Goods",
-  consulting: "Consulting",
-  government: "Government / Public Sector",
-  professional_services: "Professional Services",
-  energy: "Energy",
-  media: "Media",
-};
-
-export default function SettingsPage({ user, onClose, onToast, onProfileUpdated }) {
+export default function SettingsPage({ user, streakData, onClose, onToast, onProfileUpdated }) {
   const [fullName, setFullName] = useState("");
   const [company, setCompany] = useState("");
   const [jobTitle, setJobTitle] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [intelligenceProfile, setIntelligenceProfile] = useState(null);
-  const [profileLoading, setProfileLoading] = useState(true);
-  const [showProfileDetail, setShowProfileDetail] = useState(false);
 
-  // ─── Load existing profile data ───
+  const streakTier = streakData ? getStreakTier(streakData.current_streak || 0) : null;
+  const earnedBadges = getEarnedBadges(streakData);
+
+  // Load profile on mount
   useEffect(() => {
-    if (!user?.id) return;
-
     async function load() {
       try {
-        // Load registration profile
+        // Load editable profile
         const { data: profile } = await supabase
           .from("profiles")
           .select("full_name, company, job_title")
           .eq("id", user.id)
-          .single();
+          .maybeSingle();
 
         if (profile) {
           setFullName(profile.full_name || "");
           setCompany(profile.company || "");
           setJobTitle(profile.job_title || "");
+        } else {
+          // Fallback to auth metadata
+          setFullName(user.user_metadata?.full_name || "");
         }
 
         // Load intelligence profile
@@ -65,26 +45,21 @@ export default function SettingsPage({ user, onClose, onToast, onProfileUpdated 
           .from("user_profiles")
           .select("*")
           .eq("user_id", user.id)
-          .single();
+          .maybeSingle();
 
         if (intel) setIntelligenceProfile(intel);
-      } catch (err) {
-        console.error("[Settings] Load error:", err);
+      } catch (e) {
+        console.error("Settings load error:", e);
       }
       setLoading(false);
-      setProfileLoading(false);
     }
-
     load();
-  }, [user?.id]);
+  }, [user.id]);
 
-  // ─── Save handler ───
   async function handleSave() {
-    if (!user?.id) return;
     setSaving(true);
-
     try {
-      // 1. Update the registration profile in Supabase
+      // 1. Update profiles table + auth metadata
       const { error: profileError } = await supabase
         .from("profiles")
         .upsert({
@@ -93,24 +68,31 @@ export default function SettingsPage({ user, onClose, onToast, onProfileUpdated 
           full_name: fullName,
           company,
           job_title: jobTitle,
-        });
+        }, { onConflict: "id" });
 
       if (profileError) throw new Error(profileError.message);
 
-      // 2. Regenerate the intelligence profile (force=true triggers regardless of age)
-      const res = await fetch("/.netlify/functions/generate-user-profile", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: user.id, force: true }),
-      });
+      // Update auth metadata
+      await supabase.auth.updateUser({ data: { full_name: fullName } });
 
-      const data = await res.json();
+      // 2. Regenerate the intelligence profile
+      try {
+        const res = await fetch("/.netlify/functions/generate-user-profile", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userId: user.id, force: true }),
+        });
 
-      if (data.success) {
-        setIntelligenceProfile(data.profile);
-        if (onProfileUpdated) onProfileUpdated(data.profile);
-        onToast("Profile updated — your feed will personalise to your new role");
-      } else {
+        const data = await res.json();
+
+        if (data.success) {
+          setIntelligenceProfile(data.profile);
+          if (onProfileUpdated) onProfileUpdated(data.profile);
+          onToast("Profile updated — your feed will personalise to your new role");
+        } else {
+          onToast("Profile saved");
+        }
+      } catch {
         // Profile save succeeded even if intelligence regeneration failed
         onToast("Profile saved");
       }
@@ -183,6 +165,75 @@ export default function SettingsPage({ user, onClose, onToast, onProfileUpdated 
 
       <div style={s.body}>
 
+        {/* ── Avatar + streak summary ── */}
+        <div style={{ textAlign: "center", marginBottom: "28px" }}>
+          <div style={{
+            width: "64px", height: "64px", borderRadius: "50%", margin: "0 auto 12px",
+            background: "linear-gradient(135deg, #00E5B8, #00b4d8)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: "22px", fontWeight: 800, color: "#000",
+          }}>
+            {(fullName || user?.email || "?").charAt(0).toUpperCase()}
+          </div>
+          {user?.email && (
+            <div style={{ fontSize: "12px", color: "#666", marginBottom: "8px" }}>{user.email}</div>
+          )}
+          {streakData && streakTier && (
+            <div style={{
+              display: "inline-flex", alignItems: "center", gap: "6px",
+              padding: "6px 14px", borderRadius: "14px",
+              background: `${streakTier.color}12`, border: `1px solid ${streakTier.color}25`,
+            }}>
+              <span style={{ fontSize: "16px" }}>{streakTier.icon}</span>
+              <span style={{ fontSize: "13px", fontWeight: 700, color: streakTier.color }}>
+                {streakData.current_streak}-day streak
+              </span>
+              <span style={{ fontSize: "11px", color: "#666" }}>· {streakTier.label}</span>
+            </div>
+          )}
+        </div>
+
+        {/* ── Earned badges ── */}
+        {earnedBadges.length > 0 && (
+          <div style={{ marginBottom: "24px" }}>
+            <div style={s.sectionLabel}>Badges earned</div>
+            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+              {earnedBadges.map((b) => (
+                <div key={b.label} style={{
+                  display: "flex", alignItems: "center", gap: "4px",
+                  padding: "5px 10px", borderRadius: "10px",
+                  background: "#111", border: "1px solid #333",
+                }}>
+                  <span style={{ fontSize: "13px" }}>{b.icon}</span>
+                  <span style={{ fontSize: "11px", fontWeight: 600, color: "#ccc" }}>{b.label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ── Stats row ── */}
+        {streakData && (
+          <div style={{
+            display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px",
+            marginBottom: "28px",
+          }}>
+            {[
+              { label: "Best Streak", value: `${streakData.longest_streak || 0}d` },
+              { label: "Active Days", value: streakData.total_active_days || 0 },
+              { label: "Likes Given", value: streakData.total_likes || 0 },
+            ].map((stat) => (
+              <div key={stat.label} style={{
+                padding: "12px", borderRadius: "12px", background: "#111",
+                border: "1px solid #222", textAlign: "center",
+              }}>
+                <div style={{ fontSize: "18px", fontWeight: 700, color: "#fff" }}>{stat.value}</div>
+                <div style={{ fontSize: "10px", color: "#666", marginTop: "2px" }}>{stat.label}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* ── Profile fields ── */}
         <div style={{ ...s.sectionLabel, marginBottom: "14px" }}>Your profile</div>
 
@@ -228,107 +279,77 @@ export default function SettingsPage({ user, onClose, onToast, onProfileUpdated 
             </div>
 
             <button style={s.saveBtn} onClick={handleSave} disabled={saving}>
-              {saving ? "Saving..." : "Save changes"}
+              {saving ? "Saving…" : "Save"}
             </button>
           </>
         )}
 
-        {/* ── Intelligence profile (read-only, transparency view) ── */}
+        {/* ── Intelligence profile ── */}
         {intelligenceProfile && (
           <>
             <div style={{ height: "1px", background: "#1a1a1a", margin: "28px 0 20px" }} />
-
-            <div style={{ ...s.sectionLabel, marginBottom: "14px" }}>
-              Your feed personalisation
-              <span style={{ fontSize: "10px", fontWeight: 500, color: "#555", letterSpacing: 0, textTransform: "none", marginLeft: "8px" }}>
-                — how we rank your feed
-              </span>
-            </div>
+            <div style={{ ...s.sectionLabel, marginBottom: "14px" }}>Intelligence profile</div>
 
             <div style={s.card}>
-              <div style={{ display: "flex", gap: "12px", marginBottom: "12px" }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: "10px", color: "#666", marginBottom: "4px", textTransform: "uppercase", letterSpacing: "0.6px" }}>Industry</div>
-                  <div style={{ fontSize: "13px", fontWeight: 600, color: "#eee" }}>
-                    {INDUSTRY_LABELS[intelligenceProfile.industry] || intelligenceProfile.industry || "—"}
-                  </div>
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: "10px", color: "#666", marginBottom: "4px", textTransform: "uppercase", letterSpacing: "0.6px" }}>Function</div>
-                  <div style={{ fontSize: "13px", fontWeight: 600, color: "#eee" }}>
-                    {FUNCTION_LABELS[intelligenceProfile.function] || intelligenceProfile.function || "—"}
-                  </div>
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: "10px", color: "#666", marginBottom: "4px", textTransform: "uppercase", letterSpacing: "0.6px" }}>Level</div>
-                  <div style={{ fontSize: "13px", fontWeight: 600, color: "#eee" }}>
-                    {intelligenceProfile.seniority === "strategic" ? "Strategic" : "Operational"}
-                  </div>
-                </div>
+              <div style={{ fontSize: "12px", color: "#666", marginBottom: "4px" }}>Industry</div>
+              <div style={{ fontSize: "14px", color: "#eee", marginBottom: "12px" }}>
+                {intelligenceProfile.industry || "Not detected"}
               </div>
-
-              <button
-                onClick={() => setShowProfileDetail(!showProfileDetail)}
-                style={{ fontSize: "11px", color: "#00e5a0", background: "none", border: "none", padding: 0, cursor: "pointer" }}
-              >
-                {showProfileDetail ? "Hide detail ↑" : "Show detail ↓"}
-              </button>
-
-              {showProfileDetail && (
-                <div style={{ marginTop: "14px", animation: "fadeSlide 0.2s ease" }}>
-                  {/* Feed topics */}
-                  {intelligenceProfile.feed_topics?.length > 0 && (
-                    <div style={{ marginBottom: "12px" }}>
-                      <div style={{ fontSize: "10px", color: "#666", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.6px" }}>Topics boosted in your feed</div>
-                      <div>
-                        {intelligenceProfile.feed_topics.map(t => (
-                          <span key={t} style={{ ...s.pill, background: "rgba(0,229,160,0.08)", color: "#00e5a0", border: "1px solid rgba(0,229,160,0.2)" }}>
-                            {t.replace(/_/g, " ")}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Company keywords */}
-                  {intelligenceProfile.company_keywords?.length > 0 && (
-                    <div style={{ marginBottom: "12px" }}>
-                      <div style={{ fontSize: "10px", color: "#666", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.6px" }}>Company mentions boosted (+30pts)</div>
-                      <div>
-                        {intelligenceProfile.company_keywords.map(k => (
-                          <span key={k} style={{ ...s.pill, background: "rgba(0,180,216,0.08)", color: "#00b4d8", border: "1px solid rgba(0,180,216,0.2)" }}>
-                            {k}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Competitor keywords */}
-                  {intelligenceProfile.competitor_keywords?.length > 0 && (
-                    <div>
-                      <div style={{ fontSize: "10px", color: "#666", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.6px" }}>Competitor mentions tracked (+15pts)</div>
-                      <div>
-                        {intelligenceProfile.competitor_keywords.map(k => (
-                          <span key={k} style={{ ...s.pill, background: "rgba(168,85,247,0.08)", color: "#a855f7", border: "1px solid rgba(168,85,247,0.2)" }}>
-                            {k}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  <div style={{ fontSize: "11px", color: "#555", marginTop: "12px", lineHeight: 1.5 }}>
-                    Last updated: {new Date(intelligenceProfile.updated_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
-                    {" · "}
-                    {intelligenceProfile.profile_source === "user_corrected" ? "Manually refreshed" :
-                     intelligenceProfile.profile_source === "stale_refreshed" ? "Auto-refreshed" : "Auto-generated"}
-                  </div>
-                </div>
-              )}
+              <div style={{ fontSize: "12px", color: "#666", marginBottom: "4px" }}>Function</div>
+              <div style={{ fontSize: "14px", color: "#eee", marginBottom: "12px" }}>
+                {intelligenceProfile.function || "Not detected"}
+              </div>
+              <div style={{ fontSize: "12px", color: "#666", marginBottom: "4px" }}>Seniority</div>
+              <div style={{ fontSize: "14px", color: "#eee" }}>
+                {intelligenceProfile.seniority || "Not detected"}
+              </div>
             </div>
 
-            <div style={{ fontSize: "11px", color: "#555", lineHeight: 1.5 }}>
+            {intelligenceProfile.feed_topics && intelligenceProfile.feed_topics.length > 0 && (
+              <div style={s.card}>
+                <div style={{ fontSize: "12px", color: "#666", marginBottom: "8px" }}>Feed topics</div>
+                <div>
+                  {intelligenceProfile.feed_topics.map((t) => (
+                    <span key={t} style={{ ...s.pill, background: "rgba(0,229,160,0.1)", color: "#00e5a0", border: "1px solid rgba(0,229,160,0.2)" }}>{t}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {intelligenceProfile.company_keywords && intelligenceProfile.company_keywords.length > 0 && (
+              <div style={s.card}>
+                <div style={{ fontSize: "12px", color: "#666", marginBottom: "8px" }}>Company keywords</div>
+                <div>
+                  {intelligenceProfile.company_keywords.map((k) => (
+                    <span key={k} style={{ ...s.pill, background: "rgba(0,180,216,0.1)", color: "#00b4d8", border: "1px solid rgba(0,180,216,0.2)" }}>{k}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {intelligenceProfile.competitor_keywords && intelligenceProfile.competitor_keywords.length > 0 && (
+              <div style={s.card}>
+                <div style={{ fontSize: "12px", color: "#666", marginBottom: "8px" }}>Competitor keywords</div>
+                <div>
+                  {intelligenceProfile.competitor_keywords.map((k) => (
+                    <span key={k} style={{ ...s.pill, background: "rgba(168,85,247,0.1)", color: "#a855f7", border: "1px solid rgba(168,85,247,0.2)" }}>{k}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "8px" }}>
+              <div style={{
+                width: "6px", height: "6px", borderRadius: "50%",
+                background: intelligenceProfile.profile_source === "user_corrected" ? "#00e5a0" : "#f59e0b",
+              }} />
+              <div style={{ fontSize: "11px", color: "#555" }}>
+                {intelligenceProfile.profile_source === "user_corrected" ? "Manually refreshed" :
+                 intelligenceProfile.profile_source === "stale_refreshed" ? "Auto-refreshed" : "Auto-generated"}
+              </div>
+            </div>
+
+            <div style={{ fontSize: "11px", color: "#555", lineHeight: 1.5, marginTop: "12px" }}>
               This is how TIC Pulse personalises your feed. Articles matching your industry and function rank higher. Save your profile above to refresh these inferences.
             </div>
           </>
