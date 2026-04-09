@@ -114,6 +114,8 @@ function PulseApp({ session }) {
   const [toast, setToast] = useState({ msg: "", show: false });
 
   const [selectedIds, setSelectedIds] = useState([]);
+  const [selectedVideos, setSelectedVideos] = useState([]);
+  const [selectedEpisodes, setSelectedEpisodes] = useState([]);
   const [showNewsletter, setShowNewsletter] = useState(false);
   const [showAudioBriefing, setShowAudioBriefing] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -286,9 +288,9 @@ function PulseApp({ session }) {
   }, []);
 
   const handleOpenNewsletter = useCallback(() => {
-    if (selectedIds.length === 0) return;
+    if (selectedIds.length === 0 && selectedVideos.length === 0 && selectedEpisodes.length === 0) return;
     setShowNewsletter(true);
-  }, [selectedIds]);
+  }, [selectedIds, selectedVideos, selectedEpisodes]);
 
   const selectedArticles = useMemo(() => {
     const articleMap = new Map(articles.map((a) => [a.id, a]));
@@ -296,6 +298,8 @@ function PulseApp({ session }) {
   }, [articles, selectedIds]);
 
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+
+  const totalSelected = selectedIds.length + selectedVideos.length + selectedEpisodes.length;
 
   // ─── Render ───
   return (
@@ -331,8 +335,8 @@ function PulseApp({ session }) {
             onRetry={loadArticles}
           />
         )}
-        {activeTab === "watch" && <WatchView />}
-        {activeTab === "listen" && <ListenView />}
+        {activeTab === "watch" && <WatchView selectedVideos={selectedVideos} onToggleVideo={setSelectedVideos} />}
+        {activeTab === "listen" && <ListenView selectedEpisodes={selectedEpisodes} onToggleEpisode={setSelectedEpisodes} />}
         {activeTab === "discover" && <DiscoverView />}
         {activeTab === "saved" && (
           <SavedView articles={articles} likedIds={likedIds} bookmarkedIds={bookmarkedIds}
@@ -343,7 +347,7 @@ function PulseApp({ session }) {
       <BottomNav activeTab={activeTab} onTabChange={setActiveTab} />
 
       {/* ─── Curation bar ─── */}
-      {selectedIds.length > 0 && (
+      {totalSelected > 0 && (
         <div style={{
           position: "fixed", bottom: "72px", left: "50%", transform: "translateX(-50%)",
           width: "calc(100% - 24px)", maxWidth: "456px", zIndex: 150,
@@ -355,11 +359,19 @@ function PulseApp({ session }) {
             boxShadow: "0 8px 40px rgba(0,0,0,0.6)",
           }}>
             <div>
-              <div style={{ fontSize: "14px", fontWeight: 700, color: "#fff" }}>{selectedIds.length} article{selectedIds.length !== 1 ? "s" : ""} selected</div>
-              <div style={{ fontSize: "11px", color: "#999", marginTop: "1px" }}>Ready to build your briefing</div>
+              <div style={{ fontSize: "14px", fontWeight: 700, color: "#fff" }}>
+                {totalSelected} item{totalSelected !== 1 ? "s" : ""} selected
+              </div>
+              <div style={{ fontSize: "11px", color: "#999", marginTop: "1px" }}>
+                {[
+                  selectedIds.length > 0 && `${selectedIds.length} article${selectedIds.length !== 1 ? "s" : ""}`,
+                  selectedVideos.length > 0 && `${selectedVideos.length} video${selectedVideos.length !== 1 ? "s" : ""}`,
+                  selectedEpisodes.length > 0 && `${selectedEpisodes.length} podcast${selectedEpisodes.length !== 1 ? "s" : ""}`,
+                ].filter(Boolean).join(" · ")}
+              </div>
             </div>
             <div style={{ display: "flex", gap: "8px" }}>
-              <button onClick={() => setSelectedIds([])} style={{ background: "none", border: "1px solid #444", borderRadius: "12px", color: "#ccc", padding: "10px 14px", fontSize: "12px", fontWeight: 600 }}>Clear</button>
+              <button onClick={() => { setSelectedIds([]); setSelectedVideos([]); setSelectedEpisodes([]); }} style={{ background: "none", border: "1px solid #444", borderRadius: "12px", color: "#ccc", padding: "10px 14px", fontSize: "12px", fontWeight: 600 }}>Clear</button>
               <button
                 onClick={() => setShowAudioBriefing(true)}
                 title="Create audio briefing"
@@ -372,11 +384,11 @@ function PulseApp({ session }) {
             </div>
           </div>
         </div>
-      )}
+      }
 
       <ShareSheet article={shareTarget} onClose={() => setShareTarget(null)} onToast={showToast} />
       <Toast message={toast.msg} visible={toast.show} />
-      {showNewsletter && <NewsletterBuilder articles={selectedArticles} onClose={() => setShowNewsletter(false)} onToast={showToast} />}
+      {showNewsletter && <NewsletterBuilder articles={selectedArticles} videos={selectedVideos} episodes={selectedEpisodes} onClose={() => setShowNewsletter(false)} onToast={showToast} />}
       {showAudioBriefing && <AudioBriefing articles={selectedArticles} userId={userId} onClose={() => setShowAudioBriefing(false)} onToast={showToast} />}
       {showSettings && (
         <SettingsPage
@@ -607,13 +619,15 @@ function FeedView({ articles, loading, error, searchQuery, likedIds, bookmarkedI
 //  WATCH VIEW
 // ═══════════════════════════════════════════════
 
-function WatchView() {
+function WatchView({ selectedVideos, onToggleVideo }) {
   const [videos, setVideos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [typeFilter, setTypeFilter] = useState("all");
   const [selected, setSelected] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [topicFilter, setTopicFilter] = useState(null);
+
+  const selectedVideoIds = useMemo(() => new Set((selectedVideos || []).map(v => v.id)), [selectedVideos]);
 
   useEffect(() => {
     async function load() {
@@ -771,16 +785,19 @@ function WatchView() {
           {filteredVideos.map((v, i) => {
             const tc = videoTypeColor(v.video_type);
             const thumbUrl = v.thumbnail_url || (v.youtube_id ? `https://img.youtube.com/vi/${v.youtube_id}/hqdefault.jpg` : null);
+            const isSelected = selectedVideoIds.has(v.id);
             return (
-              <div key={v.id} onClick={() => setSelected(v)} style={{
+              <div key={v.id} style={{
                 cursor: "pointer", background: "#111", borderRadius: 14, overflow: "hidden",
-                border: "1px solid #222", transition: "border-color 0.2s, transform 0.15s",
+                border: `1px solid ${isSelected ? "#00e5a0" : "#222"}`,
+                transition: "border-color 0.2s, transform 0.15s",
                 animation: `cardIn 0.3s ease ${i * 0.03}s both`,
+                boxShadow: isSelected ? "0 0 16px rgba(0,229,160,0.08)" : "none",
               }}
-                onMouseEnter={e => { e.currentTarget.style.borderColor = "#444"; e.currentTarget.style.transform = "translateY(-2px)"; }}
-                onMouseLeave={e => { e.currentTarget.style.borderColor = "#222"; e.currentTarget.style.transform = "none"; }}
+                onMouseEnter={e => { if (!isSelected) { e.currentTarget.style.borderColor = "#444"; e.currentTarget.style.transform = "translateY(-2px)"; }}}
+                onMouseLeave={e => { if (!isSelected) { e.currentTarget.style.borderColor = "#222"; e.currentTarget.style.transform = "none"; }}}
               >
-                <div style={{ width: "100%", aspectRatio: "16/9", position: "relative", background: thumbUrl ? `url(${thumbUrl}) center/cover` : "linear-gradient(135deg, #111, #000)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <div onClick={() => setSelected(v)} style={{ width: "100%", aspectRatio: "16/9", position: "relative", background: thumbUrl ? `url(${thumbUrl}) center/cover` : "linear-gradient(135deg, #111, #000)", display: "flex", alignItems: "center", justifyContent: "center" }}>
                   <span style={{ position: "absolute", top: 6, left: 6, fontSize: 8, fontFamily: "monospace", padding: "2px 6px", borderRadius: 3, background: `${tc}30`, color: tc, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1 }}>{videoTypeLabel(v.video_type)}</span>
                   {v.duration && <span style={{ position: "absolute", bottom: 6, right: 6, fontSize: 10, fontFamily: "monospace", padding: "2px 6px", borderRadius: 3, background: "rgba(0,0,0,0.8)", color: "#ccc" }}>{v.duration}</span>}
                   <div style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(0,0,0,0.5)", border: "1.5px solid rgba(0,229,160,0.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -788,10 +805,28 @@ function WatchView() {
                   </div>
                 </div>
                 <div style={{ padding: "10px 12px" }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: "#eee", lineHeight: 1.3, marginBottom: 5, fontFamily: "Georgia, serif", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{v.title}</div>
-                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <div onClick={() => setSelected(v)} style={{ fontSize: 13, fontWeight: 700, color: "#eee", lineHeight: 1.3, marginBottom: 5, fontFamily: "Georgia, serif", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{v.title}</div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <span style={{ fontSize: 10, color: "#888" }}>{v.channel_title || v.sources?.name}</span>
-                    <span style={{ fontSize: 10, color: "#666" }}>{fmtViews(v.view_count)}</span>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleVideo(prev => isSelected ? prev.filter(x => x.id !== v.id) : [...prev, v]);
+                      }}
+                      style={{
+                        background: isSelected ? "#00e5a0" : "none",
+                        border: isSelected ? "none" : "1.5px solid #333",
+                        width: 22, height: 22, borderRadius: 6,
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        color: isSelected ? "#000" : "#666", flexShrink: 0, transition: "all 0.2s",
+                      }}
+                      title={isSelected ? "Remove from briefing" : "Add to briefing"}
+                    >
+                      {isSelected
+                        ? <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                        : <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                      }
+                    </button>
                   </div>
                 </div>
               </div>
@@ -807,7 +842,7 @@ function WatchView() {
 //  LISTEN VIEW
 // ═══════════════════════════════════════════════
 
-function ListenView() {
+function ListenView({ selectedEpisodes, onToggleEpisode }) {
   const [episodes, setEpisodes] = useState([]);
   const [sources, setSources] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -818,6 +853,8 @@ function ListenView() {
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
   const audioRef = useRef(null);
+
+  const selectedEpisodeIds = useMemo(() => new Set((selectedEpisodes || []).map(e => e.id)), [selectedEpisodes]);
 
   useEffect(() => {
     async function load() {
@@ -991,8 +1028,14 @@ function ListenView() {
             const isPlay = playing === ep.id;
             const isExp = expanded === ep.id;
             const hasAudio = !!ep.audio_url;
+            const isEpSelected = selectedEpisodeIds.has(ep.id);
             return (
-              <div key={ep.id} style={{ background: "#111", borderRadius: 14, overflow: "hidden", border: `1px solid ${isPlay ? "#00e5a0" : "#222"}`, transition: "border-color 0.3s", animation: `cardIn 0.3s ease ${i * 0.03}s both` }}>
+              <div key={ep.id} style={{
+                background: "#111", borderRadius: 14, overflow: "hidden",
+                border: `1px solid ${isPlay ? "#00e5a0" : isEpSelected ? "#00e5a040" : "#222"}`,
+                transition: "border-color 0.3s",
+                animation: `cardIn 0.3s ease ${i * 0.03}s both`,
+              }}>
                 {isPlay && <div style={{ height: 2, background: "#222" }}><div style={{ height: "100%", width: `${progress}%`, background: "#00e5a0", transition: "width 0.3s linear" }} /></div>}
                 <div style={{ padding: "14px 16px" }}>
                   <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
@@ -1027,6 +1070,23 @@ function ListenView() {
                         {ep.duration && <span style={{ fontSize: 10, color: "#666" }}>⏱ {ep.duration}</span>}
                         {!hasAudio && ep.link && <a href={ep.link} target="_blank" rel="noopener noreferrer" style={{ fontSize: 10, color: "#00e5a0", textDecoration: "none" }}>Open ↗</a>}
                         <button onClick={() => setExpanded(isExp ? null : ep.id)} style={{ fontSize: 11, color: "#00e5a0", marginLeft: "auto", background: "none", border: "none" }}>{isExp ? "Less ↑" : "More ↓"}</button>
+                        {/* Add to briefing button */}
+                        <button
+                          onClick={() => onToggleEpisode(prev => isEpSelected ? prev.filter(x => x.id !== ep.id) : [...prev, ep])}
+                          style={{
+                            background: isEpSelected ? "#00e5a0" : "none",
+                            border: isEpSelected ? "none" : "1.5px solid #333",
+                            width: 22, height: 22, borderRadius: 6, flexShrink: 0,
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                            color: isEpSelected ? "#000" : "#666", transition: "all 0.2s",
+                          }}
+                          title={isEpSelected ? "Remove from briefing" : "Add to briefing"}
+                        >
+                          {isEpSelected
+                            ? <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                            : <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                          }
+                        </button>
                       </div>
                     </div>
                   </div>
