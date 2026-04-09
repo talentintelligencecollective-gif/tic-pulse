@@ -15,17 +15,7 @@ export const supabase = createClient(supabaseUrl || "", supabaseAnonKey || "");
 
 // ─── Article Queries ───
 
-/**
- * Fetch articles from the articles_feed view.
- * Returns articles sorted by created_at DESC.
- *
- * @param {Object} options
- * @param {string} [options.category] - Filter by category (omit for all)
- * @param {string} [options.search] - Search in title and tldr
- * @param {number} [options.limit=200] - Max articles to return
- * @param {number} [options.offset=0] - Pagination offset
- */
-export async function fetchArticles({ category, search, limit = 200, offset = 0 } = {}) {
+export async function fetchArticles({ category, search, limit = 30, offset = 0 } = {}) {
   let query = supabase
     .from("articles_feed")
     .select("*")
@@ -37,11 +27,7 @@ export async function fetchArticles({ category, search, limit = 200, offset = 0 
   }
 
   if (search) {
-    // Sanitise special characters for PostgREST ilike
-    const safe = search.replace(/[%_'"\\]/g, "");
-    if (safe.length > 0) {
-      query = query.or(`title.ilike.%${safe}%,tldr.ilike.%${safe}%`);
-    }
+    query = query.or(`title.ilike.%${search}%,tldr.ilike.%${search}%`);
   }
 
   const { data, error } = await query;
@@ -54,13 +40,6 @@ export async function fetchArticles({ category, search, limit = 200, offset = 0 
   return data || [];
 }
 
-/**
- * Increment an engagement counter atomically.
- *
- * @param {string} articleId - UUID of the article
- * @param {string} field - One of: like_count, share_count, view_count
- * @param {number} [delta=1] - Amount to increment (use -1 to decrement)
- */
 export async function incrementEngagement(articleId, field, delta = 1) {
   const { error } = await supabase.rpc("increment_engagement", {
     p_article_id: articleId,
@@ -73,9 +52,6 @@ export async function incrementEngagement(articleId, field, delta = 1) {
   }
 }
 
-/**
- * Fetch top categories by article count for the Discover view.
- */
 export async function fetchCategoryCounts() {
   const { data, error } = await supabase
     .from("articles_feed")
@@ -90,70 +66,64 @@ export async function fetchCategoryCounts() {
   return counts;
 }
 
-// ─── Interaction Tracking (for personalisation) ───
+// ═══════════════════════════════════════════════
+//  USER PROFILES
+// ═══════════════════════════════════════════════
 
 /**
- * Log a user interaction for personalisation scoring.
- * Fires and forgets — errors are logged but don't block UI.
- *
- * @param {string} userId
- * @param {string} articleId
- * @param {string} interactionType - 'like' | 'bookmark' | 'share' | 'click'
- * @param {Object} article - The article object (needs category, tags, region)
+ * Fetch a user's profile (full_name, company, job_title).
  */
-export async function trackInteraction(userId, articleId, interactionType, article) {
-  if (!userId || !articleId) return;
-  try {
-    await supabase.from("user_interactions").insert({
-      user_id: userId,
-      article_id: articleId,
-      interaction_type: interactionType,
-      category: article?.category || null,
-      tags: article?.tags || [],
-      region: article?.region || null,
-    });
-  } catch (err) {
-    // Silently fail — personalisation is non-critical
-    console.warn("trackInteraction error:", err.message);
-  }
-}
-
-/**
- * Fetch a user's category affinities from the user_affinities view.
- * Returns { "Automation": { total: 12, recent: 5 }, ... }
- *
- * @param {string} userId
- * @returns {Object} affinities keyed by category
- */
-export async function fetchUserAffinities(userId) {
-  if (!userId) return {};
+export async function fetchUserProfile(userId) {
+  if (!userId) return null;
   try {
     const { data, error } = await supabase
-      .from("user_affinities")
-      .select("*")
-      .eq("user_id", userId);
-
-    if (error || !data) return {};
-
-    const result = {};
-    for (const row of data) {
-      result[row.category] = {
-        total: row.interaction_count || 0,
-        recent: row.recent_count || 0,
-        likes: row.like_count || 0,
-        bookmarks: row.bookmark_count || 0,
-      };
-    }
-    return result;
-  } catch (err) {
-    console.warn("fetchUserAffinities error:", err.message);
-    return {};
+      .from("profiles")
+      .select("full_name, company, job_title")
+      .eq("id", userId)
+      .maybeSingle();
+    if (error || !data) return null;
+    return data;
+  } catch {
+    return null;
   }
 }
 
-// ─── Streaks & Badges ───
+/**
+ * Update a user's profile and auth metadata.
+ * Returns true on success.
+ */
+export async function updateUserProfile(userId, { fullName, company, jobTitle }) {
+  if (!userId) return false;
+  try {
+    const { error: profileErr } = await supabase
+      .from("profiles")
+      .upsert({
+        id: userId,
+        full_name: fullName,
+        company,
+        job_title: jobTitle,
+      }, { onConflict: "id" });
 
-const STREAK_TIERS = [
+    if (profileErr) {
+      console.error("Profile update error:", profileErr.message);
+      return false;
+    }
+
+    // Keep auth metadata in sync so full_name is used in comments
+    await supabase.auth.updateUser({ data: { full_name: fullName } });
+
+    return true;
+  } catch (e) {
+    console.error("updateUserProfile error:", e.message);
+    return false;
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  USER STREAKS & BADGES
+// ═══════════════════════════════════════════════
+
+export const STREAK_TIERS = [
   { min: 500, label: "Legend",     icon: "⭐", color: "#ffd700" },
   { min: 300, label: "Champion",   icon: "🏆", color: "#f59e0b" },
   { min: 100, label: "Centurion",  icon: "👑", color: "#a855f7" },
@@ -163,18 +133,68 @@ const STREAK_TIERS = [
   { min:   0, label: "New Member", icon: "🌱", color: "#888888" },
 ];
 
+export const ENGAGEMENT_BADGES = [
+  { field: "total_comments",    min: 10, label: "Commenter",  icon: "💬" },
+  { field: "total_likes",       min: 50, label: "Supporter",  icon: "❤️"  },
+  { field: "total_newsletters", min: 5,  label: "Curator",    icon: "📰" },
+  { field: "total_shares",      min: 20, label: "Amplifier",  icon: "📡" },
+  { field: "total_bookmarks",   min: 30, label: "Collector",  icon: "📚" },
+];
+
 /**
- * Get the streak tier for a given streak count.
+ * Get the streak tier object for a given streak count.
  */
 export function getStreakTier(streakCount) {
   for (const tier of STREAK_TIERS) {
-    if (streakCount >= tier.min) return tier;
+    if ((streakCount || 0) >= tier.min) return tier;
   }
   return STREAK_TIERS[STREAK_TIERS.length - 1];
 }
 
 /**
- * Fetch a user's streak data (for comment badges).
+ * Get earned engagement badges from a streak data row.
+ */
+export function getEarnedBadges(streakData) {
+  if (!streakData) return [];
+  return ENGAGEMENT_BADGES.filter((b) => (streakData[b.field] || 0) >= b.min);
+}
+
+/**
+ * Call on app open — updates the streak server-side and returns the row.
+ */
+export async function updateStreak(userId) {
+  if (!userId) return null;
+  try {
+    const { data, error } = await supabase.rpc("update_user_streak", {
+      p_user_id: userId,
+    });
+    if (error) {
+      console.error("updateStreak error:", error.message);
+      return null;
+    }
+    return data?.[0] || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Increment an engagement counter on the streak row.
+ * field: total_likes | total_comments | total_shares | total_bookmarks | total_newsletters
+ */
+export async function incrementStreakCounter(userId, field, delta = 1) {
+  if (!userId) return;
+  try {
+    await supabase.rpc("increment_streak_counter", {
+      p_user_id: userId,
+      p_field: field,
+      p_delta: delta,
+    });
+  } catch {}
+}
+
+/**
+ * Fetch another user's streak data (used for comment badges).
  */
 export async function fetchUserStreak(userId) {
   if (!userId) return null;
@@ -189,130 +209,4 @@ export async function fetchUserStreak(userId) {
   } catch {
     return null;
   }
-}
-
-/**
- * Increment a streak engagement counter.
- */
-export async function incrementStreakCounter(userId, field, delta = 1) {
-  if (!userId) return;
-  try {
-    await supabase.rpc("increment_streak_counter", {
-      p_user_id: userId,
-      p_field: field,
-      p_delta: delta,
-    });
-  } catch {}
-}
-
-// ─── Streak Badges ───
-
-const ENGAGEMENT_BADGES = [
-  { field: "total_comments",    min: 10, label: "Commenter",  icon: "💬" },
-  { field: "total_likes",       min: 50, label: "Supporter",  icon: "❤️" },
-  { field: "total_newsletters", min: 5,  label: "Curator",    icon: "📰" },
-  { field: "total_shares",      min: 20, label: "Amplifier",  icon: "📡" },
-  { field: "total_bookmarks",   min: 30, label: "Collector",  icon: "📚" },
-];
-
-export function getEarnedBadges(streakData) {
-  if (!streakData) return [];
-  return ENGAGEMENT_BADGES.filter((b) => (streakData[b.field] || 0) >= b.min);
-}
-
-export async function updateStreak(userId) {
-  if (!userId) return null;
-  try {
-    const { data, error } = await supabase.rpc("update_user_streak", {
-      p_user_id: userId,
-    });
-    if (error) { console.error("updateStreak error:", error.message); return null; }
-    return data?.[0] || null;
-  } catch { return null; }
-}
-
-// ─── Newsletter & Brand Guidelines ───
-
-export async function loadNewsletterPrefs(userId) {
-  if (!userId) return null;
-  try {
-    const { data, error } = await supabase
-      .from("user_engagement")
-      .select("newsletter_prefs")
-      .eq("user_id", userId)
-      .maybeSingle();
-    if (error || !data) return null;
-    return data.newsletter_prefs || null;
-  } catch { return null; }
-}
-
-export async function saveNewsletterPrefs(userId, prefs) {
-  if (!userId) return;
-  try {
-    await supabase.from("user_engagement").upsert({
-      user_id: userId,
-      newsletter_prefs: prefs,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: "user_id" });
-  } catch (e) { console.error("saveUserPreferences error:", e.message); }
-}
-
-export async function lookupBrandGuidelines(companyName) {
-  if (!companyName) return null;
-  try {
-    const { data, error } = await supabase
-      .from("brand_guidelines")
-      .select("*")
-      .ilike("company_name", `%${companyName}%`)
-      .limit(1)
-      .maybeSingle();
-    if (error || !data) return null;
-    return data;
-  } catch { return null; }
-}
-
-export async function saveBrandGuidelines(guidelines) {
-  if (!guidelines?.company_name) return null;
-  try {
-    const { data, error } = await supabase
-      .from("brand_guidelines")
-      .upsert(guidelines, { onConflict: "company_name" })
-      .select()
-      .maybeSingle();
-    if (error) { console.error("saveBrandGuidelines error:", error.message); return null; }
-    return data;
-  } catch (e) { console.error("saveBrandGuidelines error:", e.message); return null; }
-}
-
-export async function sendNewsletterEmail({ to, subject, html }) {
-  console.log("sendNewsletterEmail — use Brevo function or Download HTML instead.");
-  return { ok: false, message: "Use 'Download HTML' or 'Copy to clipboard' instead." };
-}
-
-// ─── User Profiles ───
-
-export async function fetchUserProfile(userId) {
-  if (!userId) return null;
-  try {
-    const { data, error } = await supabase
-      .from("profiles")
-      .select("full_name, company, job_title")
-      .eq("id", userId)
-      .maybeSingle();
-    if (error || !data) return null;
-    return data;
-  } catch { return null; }
-}
-
-export async function updateUserProfile(userId, { fullName, company, jobTitle }) {
-  if (!userId) return false;
-  try {
-    const { error: profileErr } = await supabase
-      .from("profiles")
-      .upsert({ id: userId, full_name: fullName, company, job_title: jobTitle }, { onConflict: "id" });
-    if (profileErr) { console.error("Profile update error:", profileErr.message); return false; }
-    const { error: authErr } = await supabase.auth.updateUser({ data: { full_name: fullName } });
-    if (authErr) console.error("Auth metadata update error:", authErr.message);
-    return true;
-  } catch (e) { console.error("updateUserProfile error:", e.message); return false; }
 }
