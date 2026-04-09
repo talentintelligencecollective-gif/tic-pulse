@@ -3,12 +3,6 @@
   publish = "dist"
   functions = "netlify/functions"
 
-# SPA fallback — serve index.html for all routes
-[[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200
-
 # Environment variable context
 [context.production.environment]
   NODE_VERSION = "20"
@@ -16,15 +10,37 @@
 [context.deploy-preview.environment]
   NODE_VERSION = "20"
 
-# Scheduled function: fetch GDELT articles every 30 minutes
+# ─── Scheduled Functions ───
+
+# News pipeline: drip-feed every 5 minutes
 [functions."fetch-gdelt"]
-  schedule = "*/30 * * * *"
+  schedule = "*/5 * * * *"
 
-# Scheduled function: clean up expired audio briefings daily at 03:00 UTC
-[functions."cleanup-audio"]
-  schedule = "0 3 * * *"
+# Podcasts: daily at 06:00 UTC
+[functions."fetch-podcasts"]
+  schedule = "0 6 * * *"
 
-# Headers for security and caching
+# YouTube: daily at 06:30 UTC
+[functions."fetch-youtube"]
+  schedule = "30 6 * * *"
+
+# ─── Redirects ───
+
+# Serve .well-known files directly (for Play Store TWA)
+[[redirects]]
+  from = "/.well-known/*"
+  to = "/.well-known/:splat"
+  status = 200
+
+# SPA fallback — serve index.html for all other routes
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# ─── Headers ───
+
+# Security headers for all routes
 [[headers]]
   for = "/*"
   [headers.values]
@@ -32,7 +48,28 @@
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
 
+# Cache static assets aggressively
 [[headers]]
   for = "/assets/*"
   [headers.values]
     Cache-Control = "public, max-age=31536000, immutable"
+
+# Manifest — no cache for PWA updates
+[[headers]]
+  for = "/manifest.json"
+  [headers.values]
+    Cache-Control = "no-cache"
+    Content-Type = "application/manifest+json"
+
+# Service worker — always revalidate
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-cache, no-store, must-revalidate"
+
+# Asset links for Play Store TWA
+[[headers]]
+  for = "/.well-known/assetlinks.json"
+  [headers.values]
+    Content-Type = "application/json"
+    Cache-Control = "public, max-age=3600"
