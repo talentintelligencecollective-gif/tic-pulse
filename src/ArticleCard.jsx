@@ -1,11 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
-import { createClient } from "@supabase/supabase-js";
+import { supabase } from "./supabase.js";
 import { HeartIcon, CommentIcon, ShareIcon, BookmarkIcon, ExternalIcon, ToneIndicator } from "./Icons.jsx";
-
-const supabase = createClient(
-  import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
-);
 
 const CAT_COLORS = {
   "Talent Strategy": "#00e5a0", "Labour Market": "#00b4d8", "Automation": "#ff6b35",
@@ -63,104 +58,49 @@ function LikersSheet({ articleId, likeCount, onClose }) {
     loadLikers();
   }, [articleId]);
 
-  // Build summary string: "Toby B. and 3 others" etc.
-  function buildSummary(likers) {
-    if (!likers.length) return null;
-    const names = likers.map((l) => l.user_name || "Someone");
-    if (names.length === 1) return names[0];
-    if (names.length === 2) return `${names[0]} and ${names[1]}`;
-    return `${names[0]}, ${names[1]} and ${names.length - 2} other${names.length - 2 > 1 ? "s" : ""}`;
-  }
-
-  const summary = buildSummary(likers);
+  const summary = likers.length === 0
+    ? `${likeCount} like${likeCount !== 1 ? "s" : ""}`
+    : likers.length === 1
+    ? `Liked by ${likers[0].user_name || "someone"}`
+    : `Liked by ${likers[0].user_name || "someone"} and ${likers.length - 1} other${likers.length > 2 ? "s" : ""}`;
 
   return (
     <>
-      {/* Backdrop */}
-      <div
-        onClick={onClose}
-        style={{
-          position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
-          zIndex: 200, animation: "fadeIn 0.2s ease",
-        }}
-      />
-      {/* Sheet */}
+      <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000 }} onClick={onClose} />
       <div style={{
         position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)",
-        width: "100%", maxWidth: "480px",
-        background: "#161616", borderRadius: "20px 20px 0 0",
-        zIndex: 201, animation: "slideUp 0.3s cubic-bezier(0.16,1,0.3,1)",
-        paddingBottom: "env(safe-area-inset-bottom, 16px)",
-        maxHeight: "60vh", display: "flex", flexDirection: "column",
+        width: "100%", maxWidth: "480px", zIndex: 1001,
+        background: "#111", borderRadius: "20px 20px 0 0",
+        padding: "16px", maxHeight: "50vh", overflowY: "auto",
+        animation: "fadeSlide 0.25s ease",
       }}>
-        {/* Handle */}
-        <div style={{ display: "flex", justifyContent: "center", paddingTop: "12px", paddingBottom: "4px" }}>
-          <div style={{ width: "36px", height: "4px", borderRadius: "2px", background: "#333" }} />
+        <div style={{ width: "40px", height: "4px", borderRadius: "2px", background: "#333", margin: "0 auto 16px" }} />
+        <div style={{ fontSize: "15px", fontWeight: 700, color: "#fff", marginBottom: "4px" }}>{summary}</div>
+        <div style={{ fontSize: "12px", color: "#666", marginBottom: "16px" }}>
+          {likeCount} total like{likeCount !== 1 ? "s" : ""}
         </div>
-
-        {/* Header */}
-        <div style={{ padding: "12px 20px 14px", borderBottom: "1px solid #222", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <HeartIcon filled={true} />
-            <span style={{ fontSize: "15px", fontWeight: 700, color: "#eee" }}>
-              {likeCount > 0 ? `${likeCount} ${likeCount === 1 ? "like" : "likes"}` : "Likes"}
-            </span>
-          </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: "#666", padding: "4px", lineHeight: 1 }}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
-        </div>
-
-        {/* Summary line */}
-        {!loading && summary && (
-          <div style={{ padding: "12px 20px 4px" }}>
-            <p style={{ fontSize: "13px", color: "#888", margin: 0, lineHeight: 1.5 }}>
-              <span style={{ color: "#ccc", fontWeight: 600 }}>{summary}</span> liked this
-            </p>
-          </div>
-        )}
-
-        {/* List */}
-        <div style={{ overflowY: "auto", flex: 1, padding: "8px 0 16px" }}>
-          {loading && (
-            <div style={{ padding: "24px", textAlign: "center" }}>
-              <p style={{ fontSize: "13px", color: "#555" }}>Loading…</p>
-            </div>
-          )}
-
-          {!loading && likers.length === 0 && (
-            <div style={{ padding: "32px 20px", textAlign: "center" }}>
-              <div style={{ fontSize: "28px", marginBottom: "10px" }}>🤍</div>
-              <p style={{ fontSize: "13px", color: "#666" }}>No likes yet — be the first</p>
-            </div>
-          )}
-
-          {likers.map((liker, i) => {
-            const name = liker.user_name || "Anonymous";
-            const initial = name.charAt(0).toUpperCase();
-            // Cycle through a small palette for avatars
-            const avatarColors = ["#00e5a0", "#00b4d8", "#a855f7", "#f59e0b", "#ec4899", "#06b6d4"];
-            const avatarColor = avatarColors[i % avatarColors.length];
-            return (
-              <div key={i} style={{
-                display: "flex", alignItems: "center", gap: "12px",
-                padding: "10px 20px",
-                borderBottom: i < likers.length - 1 ? "1px solid #1a1a1a" : "none",
-                animation: `fadeSlide 0.2s ease ${i * 0.04}s both`,
+        {loading ? (
+          <div style={{ textAlign: "center", padding: "20px", color: "#555", fontSize: "13px" }}>Loading...</div>
+        ) : likers.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "20px", color: "#555", fontSize: "13px" }}>No likes yet</div>
+        ) : (
+          likers.map((liker, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: "10px", padding: "8px 0", borderBottom: i < likers.length - 1 ? "1px solid #1a1a1a" : "none" }}>
+              <div style={{
+                width: "32px", height: "32px", borderRadius: "50%",
+                background: "linear-gradient(135deg, #00e5a0, #00b4d8)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: "11px", fontWeight: 800, color: "#000",
               }}>
-                <div style={{
-                  width: "36px", height: "36px", borderRadius: "50%", flexShrink: 0,
-                  background: `${avatarColor}20`,
-                  border: `1.5px solid ${avatarColor}40`,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: "13px", fontWeight: 700, color: avatarColor,
-                }}>{initial}</div>
-                <span style={{ fontSize: "14px", fontWeight: 600, color: "#ddd" }}>{name}</span>
-                <HeartIcon filled={true} style={{ marginLeft: "auto", flexShrink: 0 }} />
+                {(liker.user_name || "?").charAt(0).toUpperCase()}
               </div>
-            );
-          })}
-        </div>
+              <div>
+                <div style={{ fontSize: "13px", fontWeight: 600, color: "#eee" }}>{liker.user_name || "Anonymous"}</div>
+                <div style={{ fontSize: "10px", color: "#555" }}>{formatRelativeTime(liker.updated_at)}</div>
+              </div>
+            </div>
+          ))
+        )}
       </div>
     </>
   );
@@ -168,12 +108,12 @@ function LikersSheet({ articleId, likeCount, onClose }) {
 
 export default function ArticleCard({ article, index, user, onLike, onBookmark, onShare, isLiked, isBookmarked, isSelected, onToggleSelect }) {
   const [showComments, setShowComments] = useState(false);
-  const [showLikers, setShowLikers] = useState(false);
   const [imgError, setImgError] = useState(false);
   const [comments, setComments] = useState([]);
   const [commentText, setCommentText] = useState("");
   const [commentCount, setCommentCount] = useState(article.comment_count || 0);
   const [submitting, setSubmitting] = useState(false);
+  const [showLikers, setShowLikers] = useState(false);
 
   const color = CAT_COLORS[article.category] || "#00e5a0";
   const abbr = sourceAbbr(article.source_name);
@@ -251,14 +191,10 @@ export default function ArticleCard({ article, index, user, onLike, onBookmark, 
   }, []);
 
   // ─── Like handler — writes user_name alongside the upsert ───
-  // NOTE: This component calls onLike for optimistic UI in App.jsx,
-  // but also handles writing user_name here since App.jsx doesn't have it.
-  // The upsert in App.jsx will run too — that's fine, last-write-wins on user_name.
   const handleLikeWithName = useCallback(() => {
     if (user) {
       const userName = user.user_metadata?.full_name || user.email?.split("@")[0] || "Anonymous";
       const isCurrentlyLiked = isLiked;
-      // Fire-and-forget name write — the like toggle itself is handled by App.jsx
       supabase.from("user_engagement").upsert({
         user_id: user.id,
         article_id: article.id,
@@ -305,25 +241,24 @@ export default function ArticleCard({ article, index, user, onLike, onBookmark, 
         <div style={{ position: "relative", paddingTop: "50%", overflow: "hidden" }}>
           <div style={{
             position: "absolute", inset: 0,
-            background: hasImage ? "none" : `linear-gradient(135deg, ${grad1}, ${grad2})`,
+            background: hasImage ? `url(${article.image_url}) center/cover` : `linear-gradient(135deg, ${grad1}, ${grad2})`,
           }}>
-            {hasImage && (
-              <img src={article.image_url} alt="" onError={() => setImgError(true)} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
-            )}
+            {hasImage && <img src={article.image_url} alt="" style={{ display: "none" }} onError={() => setImgError(true)} />}
             {!hasImage && (
               <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <div style={{ fontSize: "11px", fontWeight: 700, color: `${color}60`, letterSpacing: "2px", textTransform: "uppercase" }}>{article.category}</div>
+                <div style={{ fontSize: "40px", fontWeight: 800, color: `${color}15`, fontFamily: "Georgia, serif" }}>
+                  {(article.category || "TIC").charAt(0)}
+                </div>
               </div>
             )}
           </div>
         </div>
 
         {/* Content */}
-        <div style={{ padding: "16px 18px 14px" }}>
-          <h2 style={{ fontSize: "16px", fontWeight: 700, color: "#eee", lineHeight: 1.4, margin: "0 0 10px", fontFamily: "Georgia, serif", letterSpacing: "-0.3px" }}>{article.title}</h2>
-          {article.tldr && (
-            <p style={{ fontSize: "13px", color: "#888", lineHeight: 1.6, margin: "0 0 10px" }}>{article.tldr}</p>
-          )}
+        <div style={{ padding: "14px 18px" }}>
+          <h2 style={{ fontSize: "16px", fontWeight: 700, color: "#fff", margin: "0 0 8px", lineHeight: 1.35, fontFamily: "Georgia, serif", letterSpacing: "-0.3px" }}>{article.title}</h2>
+          {article.tldr && <p style={{ fontSize: "13px", lineHeight: 1.6, color: "#999", margin: 0 }}>{article.tldr}</p>}
+
           <div style={{ display: "flex", gap: "6px", marginTop: "10px", flexWrap: "wrap", alignItems: "center" }}>
             {(article.tags || []).map((tag) => (
               <span key={tag} style={{ fontSize: "11px", color: "#888", cursor: "pointer", transition: "color 0.2s" }}
@@ -345,36 +280,7 @@ export default function ArticleCard({ article, index, user, onLike, onBookmark, 
         {/* Action Bar */}
         <div onClick={(e) => e.stopPropagation()} style={{ padding: "10px 18px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", borderTop: "1px solid #1a1a1a" }}>
           <div style={{ display: "flex", gap: "18px" }}>
-
-            {/* Like button — tap icon to toggle, tap count to see likers */}
-            <div style={{ display: "flex", alignItems: "center", gap: "0px" }}>
-              <button
-                onClick={handleLikeWithName}
-                style={{
-                  background: "none", border: "none", display: "flex", alignItems: "center",
-                  padding: "0 4px 0 0", color: isLiked ? "#ff3b5c" : "#888", transition: "color 0.2s",
-                }}
-                onMouseEnter={(e) => { if (!isLiked) e.currentTarget.style.color = "#ff3b5c"; }}
-                onMouseLeave={(e) => { if (!isLiked) e.currentTarget.style.color = "#888"; }}
-                aria-label={isLiked ? "Unlike" : "Like"}
-              >
-                <HeartIcon filled={isLiked} />
-              </button>
-              <button
-                onClick={() => setShowLikers(true)}
-                style={{
-                  background: "none", border: "none", padding: "0 2px",
-                  color: isLiked ? "#ff3b5c" : "#888", fontSize: "12px", fontWeight: 600,
-                  transition: "color 0.2s", minWidth: "20px", textAlign: "left",
-                }}
-                onMouseEnter={(e) => e.currentTarget.style.color = "#ff3b5c"}
-                onMouseLeave={(e) => e.currentTarget.style.color = isLiked ? "#ff3b5c" : "#888"}
-                aria-label="See who liked this"
-              >
-                {fmt(article.like_count)}
-              </button>
-            </div>
-
+            <ActionButton icon={<HeartIcon filled={isLiked} />} count={fmt(article.like_count)} active={isLiked} activeColor="#ff3b5c" onClick={handleLikeWithName} onCountClick={() => setShowLikers(true)} />
             <ActionButton icon={<CommentIcon />} count={fmt(commentCount)} active={showComments} activeColor="#00e5a0" onClick={() => setShowComments(!showComments)} />
             <ActionButton icon={<ShareIcon />} count={fmt(article.share_count)} active={false} activeColor="#00b4d8" onClick={() => onShare(article)} />
           </div>
@@ -401,7 +307,6 @@ export default function ArticleCard({ article, index, user, onLike, onBookmark, 
         {/* Comments Section */}
         {showComments && (
           <div style={{ padding: "2px 18px 18px", borderTop: "1px solid #1a1a1a", animation: "fadeSlide 0.25s ease" }}>
-            {/* Comment input */}
             {user ? (
               <div style={{ display: "flex", gap: "10px", alignItems: "flex-start", marginTop: "14px", marginBottom: "16px" }}>
                 <div style={{
@@ -423,7 +328,7 @@ export default function ArticleCard({ article, index, user, onLike, onBookmark, 
                       width: "100%", background: "#0a0a0a", border: "1px solid #333",
                       borderRadius: "12px", padding: "10px 14px", fontSize: "13px",
                       color: "#eee", resize: "none", outline: "none", fontFamily: "inherit",
-                      lineHeight: 1.5,
+                      lineHeight: 1.5, boxSizing: "border-box",
                     }}
                     onFocus={(e) => e.target.style.borderColor = "#00e5a0"}
                     onBlur={(e) => e.target.style.borderColor = "#333"}
@@ -445,7 +350,6 @@ export default function ArticleCard({ article, index, user, onLike, onBookmark, 
               </div>
             )}
 
-            {/* Comment list */}
             {comments.length === 0 && (
               <div style={{ textAlign: "center", padding: "12px 0" }}>
                 <p style={{ fontSize: "12px", color: "#666" }}>No comments yet — be the first</p>
@@ -496,7 +400,6 @@ export default function ArticleCard({ article, index, user, onLike, onBookmark, 
         )}
       </article>
 
-      {/* Likers Sheet — rendered outside article to avoid overflow:hidden clipping */}
       {showLikers && (
         <LikersSheet
           articleId={article.id}
@@ -508,7 +411,7 @@ export default function ArticleCard({ article, index, user, onLike, onBookmark, 
   );
 }
 
-function ActionButton({ icon, count, active, activeColor, onClick }) {
+function ActionButton({ icon, count, active, activeColor, onClick, onCountClick }) {
   return (
     <button onClick={onClick} style={{
       background: "none", border: "none", display: "flex", alignItems: "center", gap: "5px",
@@ -516,6 +419,12 @@ function ActionButton({ icon, count, active, activeColor, onClick }) {
     }}
       onMouseEnter={(e) => { if (!active) e.currentTarget.style.color = activeColor; }}
       onMouseLeave={(e) => { if (!active) e.currentTarget.style.color = "#888"; }}
-    >{icon}<span>{count}</span></button>
+    >
+      {icon}
+      <span
+        onClick={onCountClick ? (e) => { e.stopPropagation(); onCountClick(); } : undefined}
+        style={onCountClick ? { cursor: "pointer" } : undefined}
+      >{count}</span>
+    </button>
   );
 }
