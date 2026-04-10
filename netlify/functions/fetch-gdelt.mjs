@@ -1,8 +1,9 @@
 // ═══════════════════════════════════════════════════════════════
-//  TIC Pulse — News Fetch + Summarise Pipeline (v3.1)
+//  TIC Pulse — News Fetch + Summarise Pipeline (v3.2)
 //  Drip-feed: runs every 5 minutes, fetches 3 RSS feeds
-//  and summarises 5 articles per run (randomised pick).
-//  ~60 queries × 9 geographies = global coverage.
+//  and summarises 5 articles per run.
+//  v3.2: REBALANCED queries + CATEGORY-DIVERSE summarisation.
+//  ~45 queries × 9 geographies = global coverage.
 //  Netlify Scheduled Function — stays well under 60s timeout.
 // ═══════════════════════════════════════════════════════════════
 
@@ -15,11 +16,12 @@ const SUMMARISE_BATCH_SIZE = 5;
 const INGEST_CAP = 15;
 
 // ═══════════════════════════════════════════════
-//  QUERIES — ~60 covering all TI domains
+//  QUERIES — ~45, BALANCED across categories
+//  Target: no single category > 20% of queries
 // ═══════════════════════════════════════════════
 
 const NEWS_QUERIES = [
-  // ── Talent strategy & acquisition ──
+  // ── Talent strategy & acquisition (10 queries) ──
   "talent acquisition strategy",
   "talent intelligence analytics",
   "talent management strategy",
@@ -30,7 +32,7 @@ const NEWS_QUERIES = [
   "talent marketplace internal",
   "employee experience retention",
   "competitor intelligence talent",
-  // ── Workforce planning & strategy ──
+  // ── Workforce planning & strategy (7 queries) ──
   "workforce planning strategy",
   "strategic workforce analytics",
   "workforce intelligence insights",
@@ -38,59 +40,48 @@ const NEWS_QUERIES = [
   "headcount planning forecasting",
   "organisational design restructuring",
   "operating model transformation",
-  // ── Skills ──
+  // ── Skills (5 queries) ──
   "skills based hiring strategy",
   "skills gap reskilling upskilling",
   "skills taxonomy workforce",
   "skills intelligence analytics",
   "credentialing microcredentials workforce",
-  // ── People analytics & HR tech ──
+  // ── People analytics & HR tech (4 queries) ──
   "people analytics HR",
   "people intelligence workforce data",
   "HR technology people analytics",
   "human capital analytics insights",
-  // ── Executive & leadership moves (broad, all C-suite + senior) ──
-  "CHRO appointed OR chief people officer hired",
-  "chief human resources officer OR chief talent officer",
-  "CEO appointed OR CEO hired OR new CEO",
-  "CFO appointed OR CFO hired OR new CFO",
-  "CTO appointed OR CTO hired OR new CTO",
-  "CIO appointed OR CIO hired OR new CIO",
-  "COO appointed OR COO hired OR new COO",
-  "chief diversity officer OR chief learning officer",
-  "VP talent OR VP people OR VP HR appointed",
-  "VP engineering hired OR VP product appointed",
-  "VP sales appointed OR VP marketing appointed",
-  "SVP human resources OR SVP people appointed",
-  "head of talent acquisition OR head of people",
-  "head of HR appointed OR head of human resources",
-  "general manager appointed OR managing director hired",
-  "president appointed OR president hired",
-  "board director appointed OR non-executive director",
-  "leadership appointment OR executive hire",
-  "executive resigns OR executive steps down OR CEO departure",
-  // ── Compensation & pay ──
+  // ── Executive & leadership moves (8 queries — consolidated) ──
+  "CHRO appointed OR chief people officer OR chief talent officer",
+  "CEO appointed OR CFO appointed OR CTO appointed OR CIO appointed",
+  "COO appointed OR chief diversity officer OR chief learning officer",
+  "VP talent OR VP people OR VP engineering OR VP product appointed",
+  "head of talent OR head of people OR head of HR appointed",
+  "general manager OR managing director appointed OR hired",
+  "board director appointed OR executive hire OR leadership appointment",
+  "executive resigns OR CEO departure OR steps down",
+  // ── Compensation & pay (5 queries) ──
   "pay transparency compensation",
   "salary benchmarking compensation strategy",
   "executive compensation pay equity",
   "total rewards benefits strategy",
   "gender pay gap reporting",
-  // ── Labour market & economics ──
+  // ── Labour market & economics (5 queries) ──
   "labour market trends employment",
   "labor market unemployment jobs",
   "labour economics workforce shortage",
   "jobs report employment data",
   "labour strategy workforce economics",
-  // ── Automation & AI ──
+  // ── Automation & AI (5 queries) ──
   "AI workforce automation",
   "agentic AI future of work",
   "generative AI workplace",
   "AI replacing jobs workforce impact",
   "automation hiring recruitment AI",
-  // ── DEI ──
+  // ── DEI (2 queries) ──
   "diversity equity inclusion workplace",
   "DEI strategy corporate",
-  // ── Macro / business strategy ──
+  // ── Macro / business strategy (3 queries) ──
   "layoffs restructuring workforce",
   "hiring freeze OR recruitment freeze",
   "return to office hybrid work policy",
@@ -192,7 +183,7 @@ async function fetchRssForPairs(pairs) {
     try {
       const url = buildRssUrl(query, geo);
       const response = await fetch(url, {
-        headers: { "User-Agent": "TIC-Pulse/3.1", "Accept": "application/xml, text/xml" },
+        headers: { "User-Agent": "TIC-Pulse/3.2", "Accept": "application/xml, text/xml" },
         signal: AbortSignal.timeout(12000),
       });
       if (!response.ok) { console.warn(`RSS ${response.status} for: ${query.slice(0, 40)} [${geo.code}]`); continue; }
@@ -328,32 +319,64 @@ async function storeNewArticles(supabase, articles) {
 
 // ═══════════════════════════════════════════════
 //  SUMMARISATION — Claude-powered, 5 per run
-//  v3.1: RANDOMISED pick to prevent topic clustering
+//  v3.2: CATEGORY-DIVERSE pick to ensure balanced
+//  feed output. Groups unsummarised backlog by
+//  predicted category, picks across groups.
 // ═══════════════════════════════════════════════
 
 async function summariseArticles(supabase) {
   if (!ANTHROPIC_KEY) { console.warn("No ANTHROPIC_API_KEY — skipping summarisation"); return 0; }
 
-  // Fetch a pool of 30, then randomly pick SUMMARISE_BATCH_SIZE
+  // Fetch a pool of 50 unsummarised articles
   const { data: pool, error } = await supabase.from("articles")
     .select("id, title, source_name, source_domain, gdelt_url")
     .eq("summarised", false)
     .order("created_at", { ascending: true })
-    .limit(30);
+    .limit(50);
 
   if (error || !pool?.length) { console.log("Nothing to summarise"); return 0; }
 
-  // Shuffle and pick
-  for (let i = pool.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [pool[i], pool[j]] = [pool[j], pool[i]];
+  // Group by predicted category using keyword classifier
+  const buckets = {};
+  for (const article of pool) {
+    const predicted = classifyByKeyword(article.title);
+    if (!buckets[predicted]) buckets[predicted] = [];
+    buckets[predicted].push(article);
   }
-  const unsummarised = pool.slice(0, SUMMARISE_BATCH_SIZE);
 
-  console.log(`Summarising ${unsummarised.length} articles (from pool of ${pool.length})...`);
+  // Round-robin pick across categories to ensure diversity
+  const picked = [];
+  const catKeys = Object.keys(buckets);
+  // Shuffle category order each run for fairness
+  for (let i = catKeys.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [catKeys[i], catKeys[j]] = [catKeys[j], catKeys[i]];
+  }
+
+  let round = 0;
+  while (picked.length < SUMMARISE_BATCH_SIZE) {
+    let pickedThisRound = false;
+    for (const cat of catKeys) {
+      if (picked.length >= SUMMARISE_BATCH_SIZE) break;
+      if (buckets[cat].length > round) {
+        picked.push(buckets[cat][round]);
+        pickedThisRound = true;
+      }
+    }
+    if (!pickedThisRound) break; // All buckets exhausted
+    round++;
+  }
+
+  const catSummary = {};
+  for (const a of picked) {
+    const c = classifyByKeyword(a.title);
+    catSummary[c] = (catSummary[c] || 0) + 1;
+  }
+  console.log(`Summarising ${picked.length} articles (from pool of ${pool.length}, cats: ${JSON.stringify(catSummary)})...`);
+
   let count = 0;
 
-  for (const article of unsummarised) {
+  for (const article of picked) {
     try {
       const ctx = await fetchArticleContext(article.gdelt_url);
       const result = await callClaude(article, ctx?.text);
@@ -394,7 +417,7 @@ async function summariseArticles(supabase) {
 async function fetchArticleContext(url) {
   try {
     const res = await fetch(url, {
-      headers: { "User-Agent": "TIC-Pulse/3.1 (news aggregator)" },
+      headers: { "User-Agent": "TIC-Pulse/3.2 (news aggregator)" },
       signal: AbortSignal.timeout(8000),
       redirect: "follow",
     });
@@ -535,7 +558,7 @@ function extractHashtags(title) {
 export default async function handler(req) {
   const start = Date.now();
   const runId = Math.floor(Date.now() / (5 * 60 * 1000)) % 1000;
-  console.log(`═══ TIC Pulse v3.1: Run #${runId} Started ═══`);
+  console.log(`═══ TIC Pulse v3.2: Run #${runId} Started ═══`);
 
   try {
     const supabase = getSupabase();
@@ -546,7 +569,7 @@ export default async function handler(req) {
     const articles = await fetchRssForPairs(pairs);
     const stored = await storeNewArticles(supabase, articles);
 
-    // Step 2: Summarise 5 unsummarised articles from the backlog (RANDOMISED)
+    // Step 2: Summarise 5 unsummarised articles (CATEGORY-DIVERSE pick)
     const summarised = await summariseArticles(supabase);
 
     const elapsed = ((Date.now() - start) / 1000).toFixed(1);
