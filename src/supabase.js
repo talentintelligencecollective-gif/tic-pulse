@@ -21,7 +21,7 @@ export const supabase = createClient(supabaseUrl || "", supabaseAnonKey || "");
  * Fetch articles from the articles_feed view.
  * Returns articles sorted by created_at DESC.
  */
-export async function fetchArticles({ category, search, limit = 30, offset = 0 } = {}) {
+export async function fetchArticles({ category, search, limit = 300, offset = 0 } = {}) {
   let query = supabase
     .from("articles_feed")
     .select("*")
