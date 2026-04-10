@@ -22,27 +22,33 @@ export const supabase = createClient(supabaseUrl || "", supabaseAnonKey || "");
  * Returns articles sorted by created_at DESC.
  */
 export async function fetchArticles({ category, search, limit = 300, offset = 0 } = {}) {
+  // Use balanced feed function for unfiltered requests
+  if (!category || category === "All") {
+    const { data, error } = await supabase.rpc("fetch_balanced_feed", { feed_limit: limit });
+    if (error) {
+      console.error("fetchArticles balanced error:", error.message);
+      return [];
+    }
+    return data || [];
+  }
+
+  // Category-specific: direct query
   let query = supabase
     .from("articles_feed")
     .select("*")
+    .eq("category", category)
     .order("created_at", { ascending: false })
     .range(offset, offset + limit - 1);
-
-  if (category && category !== "All") {
-    query = query.eq("category", category);
-  }
 
   if (search) {
     query = query.or(`title.ilike.%${search}%,tldr.ilike.%${search}%`);
   }
 
   const { data, error } = await query;
-
   if (error) {
     console.error("fetchArticles error:", error.message);
     return [];
   }
-
   return data || [];
 }
 
