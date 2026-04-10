@@ -172,7 +172,7 @@ function PulseApp({ session }) {
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchArticles({ limit: 100 });
+      const data = await fetchArticles({ limit: 300 });
       setArticles(data);
     } catch (err) {
       console.error("Failed to load articles:", err);
@@ -185,12 +185,13 @@ function PulseApp({ session }) {
   useEffect(() => { loadArticles(); }, [loadArticles]);
 
   // ─── Client-side filtering (7-day freshness) ───
+ // ─── Client-side filtering (14-day freshness, uses created_at) ───
   const filteredArticles = useMemo(() => {
-    const freshnessCutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const freshnessCutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
     return articles
       .filter((a) => {
-        const pubDate = new Date(a.published_at || a.created_at).getTime();
-        if (pubDate < freshnessCutoff) return false;
+        const articleDate = new Date(a.created_at || a.published_at).getTime();
+        if (articleDate < freshnessCutoff) return false;
         const matchesCategory = activeCategory === "All" || a.category === activeCategory;
         if (!matchesCategory) return false;
         if (searchQuery) {
