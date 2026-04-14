@@ -349,7 +349,4 @@ export default async function handler(req) {
   }
 }
 
-// ─── Schedule: daily at 06:30 UTC ───
-export const config = {
-  schedule: "0 6 * * *",
-};
+// Cron: netlify.toml [functions."fetch-youtube"] schedule = "30 6 * * *"

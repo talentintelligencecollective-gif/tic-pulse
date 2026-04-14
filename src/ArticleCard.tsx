@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
-import { supabase } from "./supabase.js";
-import { HeartIcon, CommentIcon, ShareIcon, BookmarkIcon, ExternalIcon, ToneIndicator } from "./Icons.jsx";
+import type { User } from "@supabase/supabase-js";
+import { supabase } from "./supabase";
+import type { Article } from "./schemas/article";
+import { HeartIcon, CommentIcon, ShareIcon, BookmarkIcon, ExternalIcon, ToneIndicator } from "./Icons";
 
 const CAT_COLORS = {
   "Talent Strategy": "#00e5a0", "Labour Market": "#00b4d8", "Automation": "#ff6b35",
@@ -106,7 +108,29 @@ function LikersSheet({ articleId, likeCount, onClose }) {
   );
 }
 
-export default function ArticleCard({ article, index, user, onLike, onBookmark, onShare, isLiked, isBookmarked, isSelected, onToggleSelect }) {
+export default function ArticleCard({
+  article,
+  index,
+  user,
+  onLike,
+  onBookmark,
+  onShare,
+  isLiked,
+  isBookmarked,
+  isSelected,
+  onToggleSelect,
+}: {
+  article: Article;
+  index: number;
+  user: User | null;
+  onLike: (articleId: string) => void;
+  onBookmark: (articleId: string) => void;
+  onShare: (article: Article) => void;
+  isLiked: boolean;
+  isBookmarked: boolean;
+  isSelected: boolean;
+  onToggleSelect?: (articleId: string) => void;
+}) {
   const [showComments, setShowComments] = useState(false);
   const [imgError, setImgError] = useState(false);
   const [comments, setComments] = useState([]);
@@ -281,8 +305,22 @@ export default function ArticleCard({ article, index, user, onLike, onBookmark, 
         <div onClick={(e) => e.stopPropagation()} style={{ padding: "10px 18px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", borderTop: "1px solid #1a1a1a" }}>
           <div style={{ display: "flex", gap: "18px" }}>
             <ActionButton icon={<HeartIcon filled={isLiked} />} count={fmt(article.like_count)} active={isLiked} activeColor="#ff3b5c" onClick={handleLikeWithName} onCountClick={() => setShowLikers(true)} />
-            <ActionButton icon={<CommentIcon />} count={fmt(commentCount)} active={showComments} activeColor="#00e5a0" onClick={() => setShowComments(!showComments)} />
-            <ActionButton icon={<ShareIcon />} count={fmt(article.share_count)} active={false} activeColor="#00b4d8" onClick={() => onShare(article)} />
+            <ActionButton
+              icon={<CommentIcon />}
+              count={fmt(commentCount)}
+              active={showComments}
+              activeColor="#00e5a0"
+              onClick={() => setShowComments(!showComments)}
+              onCountClick={() => setShowComments(!showComments)}
+            />
+            <ActionButton
+              icon={<ShareIcon />}
+              count={fmt(article.share_count)}
+              active={false}
+              activeColor="#00b4d8"
+              onClick={() => onShare(article)}
+              onCountClick={() => onShare(article)}
+            />
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
             {onToggleSelect && (

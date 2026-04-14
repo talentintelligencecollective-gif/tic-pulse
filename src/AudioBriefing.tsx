@@ -5,6 +5,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 import { useState, useRef, useEffect } from "react";
+import type { CSSProperties } from "react";
 
 const MAX_ARTICLES = 10;
 
@@ -222,7 +223,17 @@ export default function AudioBriefing({ articles, userId, onClose, onToast }) {
   }
 
   // ─── Shared styles ───
-  const s = {
+  const s: {
+    wrap: CSSProperties;
+    header: CSSProperties;
+    body: CSSProperties;
+    card: CSSProperties;
+    sectionLabel: CSSProperties;
+    btnPrimary: CSSProperties;
+    btnSecondary: CSSProperties;
+    actionRow: CSSProperties;
+    actionIcon: CSSProperties;
+  } = {
     wrap: {
       position: "fixed", inset: 0, zIndex: 2000, background: "#000",
       display: "flex", flexDirection: "column",

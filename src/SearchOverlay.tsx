@@ -11,7 +11,7 @@ const T = {
   bg0: "#050507", bg1: "#0a0a0e", bg2: "#111116", bg3: "#18181f", bg4: "#222230",
   accent: "#00e5a0", red: "#ff4d6a", amber: "#fbbf24", blue: "#60a5fa", purple: "#a78bfa",
   t1: "#f0f0f5", t2: "#b0b0be", t3: "#707080", t4: "#50505e",
-  border: "#1e1e2a",
+  border: "#1e1e2a", borderLight: "#2a2a38",
   font: "'DM Serif Display', Georgia, serif",
   sans: "'Syne', 'Helvetica Neue', sans-serif",
   mono: "'JetBrains Mono', monospace",
@@ -23,8 +23,8 @@ export default function SearchOverlay({ open, onClose, onSelectVideo, onSelectEp
   const [query, setQuery] = useState("");
   const [results, setResults] = useState({ videos: [], episodes: [], articles: [] });
   const [loading, setLoading] = useState(false);
-  const inputRef = useRef(null);
-  const debounceRef = useRef(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (open) {
@@ -41,7 +41,7 @@ export default function SearchOverlay({ open, onClose, onSelectVideo, onSelectEp
       return;
     }
 
-    clearTimeout(debounceRef.current);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(async () => {
       setLoading(true);
       try {
@@ -89,7 +89,9 @@ export default function SearchOverlay({ open, onClose, onSelectVideo, onSelectEp
       }
     }, 300);
 
-    return () => clearTimeout(debounceRef.current);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
   }, [query]);
 
   if (!open) return null;
@@ -115,7 +117,7 @@ export default function SearchOverlay({ open, onClose, onSelectVideo, onSelectEp
               placeholder="Search videos, episodes, articles..."
               style={{
                 width: "100%", padding: "12px 16px 12px 40px", fontSize: 15, fontFamily: T.sans,
-                background: T.bg2, border: `1px solid ${T.borderLight || T.border}`,
+                background: T.bg2, border: `1px solid ${T.borderLight}`,
                 borderRadius: 8, color: T.t1,
               }}
             />

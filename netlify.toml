@@ -16,8 +16,8 @@
 [functions."fetch-gdelt"]
   schedule = "*/5 * * * *"
 
-# Podcasts: daily at 06:00 UTC
-[functions."fetch-podcasts"]
+# Podcasts (RSS): daily at 06:00 UTC — must match file netlify/functions/fetch-podcast.js
+[functions."fetch-podcast"]
   schedule = "0 6 * * *"
 
 # YouTube: daily at 06:30 UTC

@@ -7,7 +7,8 @@
 // ═══════════════════════════════════════════════════════════════
 
 import { useState, useEffect } from "react";
-import { supabase, getStreakTier, getEarnedBadges } from "./supabase.js";
+import type { CSSProperties } from "react";
+import { supabase, getStreakTier, getEarnedBadges } from "./supabase";
 
 export default function SettingsPage({ user, streakData, onClose, onToast, onProfileUpdated }) {
   const [fullName, setFullName] = useState("");
@@ -106,7 +107,18 @@ export default function SettingsPage({ user, streakData, onClose, onToast, onPro
     setSaving(false);
   }
 
-  const s = {
+  const s: {
+    wrap: CSSProperties;
+    header: CSSProperties;
+    body: CSSProperties;
+    label: CSSProperties;
+    input: CSSProperties;
+    field: CSSProperties;
+    sectionLabel: CSSProperties;
+    card: CSSProperties;
+    pill: CSSProperties;
+    saveBtn: CSSProperties;
+  } = {
     wrap: {
       position: "fixed", inset: 0, zIndex: 2000, background: "#000",
       display: "flex", flexDirection: "column", maxWidth: "480px", margin: "0 auto",

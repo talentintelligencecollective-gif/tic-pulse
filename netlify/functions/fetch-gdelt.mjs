@@ -12,8 +12,19 @@ import { createClient } from "@supabase/supabase-js";
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
-const SUMMARISE_BATCH_SIZE = 5;
-const INGEST_CAP = 15;
+/** RSS (query, geo) pairs per scheduled run — default 3; cap env at 12 to control outbound traffic. */
+const GDELT_RSS_PAIR_COUNT = Math.min(
+  12,
+  Math.max(1, parseInt(process.env.GDELT_RSS_PAIR_COUNT || "3", 10) || 3)
+);
+const SUMMARISE_BATCH_SIZE = Math.min(
+  10,
+  Math.max(0, parseInt(process.env.GDELT_SUMMARISE_BATCH || "5", 10) || 5)
+);
+const INGEST_CAP = Math.min(
+  40,
+  Math.max(1, parseInt(process.env.GDELT_INGEST_CAP || "15", 10) || 15)
+);
 
 // ═══════════════════════════════════════════════
 //  QUERIES — ~45, BALANCED across categories
@@ -325,6 +336,10 @@ async function storeNewArticles(supabase, articles) {
 // ═══════════════════════════════════════════════
 
 async function summariseArticles(supabase) {
+  if (SUMMARISE_BATCH_SIZE <= 0) {
+    console.log("Summarisation disabled (GDELT_SUMMARISE_BATCH=0)");
+    return 0;
+  }
   if (!ANTHROPIC_KEY) { console.warn("No ANTHROPIC_API_KEY — skipping summarisation"); return 0; }
 
   // Fetch a pool of 50 unsummarised articles
@@ -563,8 +578,8 @@ export default async function handler(req) {
   try {
     const supabase = getSupabase();
 
-    // Step 1: Fetch RSS from 3 rotating (query, geo) pairs
-    const pairs = getRunPairs(3);
+    // Step 1: Fetch RSS from rotating (query, geo) pairs (count from env)
+    const pairs = getRunPairs(GDELT_RSS_PAIR_COUNT);
     console.log(`Fetching: ${pairs.map(p => `${p.query.slice(0, 30)}… [${p.geo.code}]`).join(", ")}`);
     const articles = await fetchRssForPairs(pairs);
     const stored = await storeNewArticles(supabase, articles);
@@ -593,4 +608,4 @@ export default async function handler(req) {
 }
 
 // ─── Run every 5 minutes ───
-export const config = { schedule: "*/5 * * * *" };
+// Cron schedule is defined only in netlify.toml under [functions."fetch-gdelt"]

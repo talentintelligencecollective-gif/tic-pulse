@@ -1,1036 +1,113 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { fetchArticles, incrementEngagement } from "./supabase.js";
-import ArticleCard from "./ArticleCard.jsx";
-import ShareSheet from "./ShareSheet.jsx";
-import NewsletterBuilder from "./NewsletterBuilder.jsx";
-import Toast from "./Toast.jsx";
-import {
-  SearchIcon, CloseIcon, BellIcon, TrendingIcon, BookmarkIcon,
-  FeedIcon, DiscoverIcon, PeopleIcon, NewsletterIcon,
-} from "./Icons.jsx";
+/* TIC Pulse — global styles (restored minimal set for animations + skeleton) */
 
-// ─── Constants ───
+:root {
+  --accent: #00e5a0;
+  --bg-glass: rgba(0, 0, 0, 0.72);
+  --bg-card: #111;
+  --border: #222;
+  --border-hover: #333;
+  --text-muted: #888;
+  --text-faint: #666;
+  --font-display: Georgia, "Times New Roman", serif;
+  --radius-lg: 16px;
+}
 
-const CATEGORIES = [
-  "All", "Talent Strategy", "Labour Market", "Automation",
-  "Executive Moves", "Compensation", "Workforce Planning", "Skills", "DEI",
-];
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
 
-const CAT_COLORS = {
-  "Talent Strategy": "#00e5a0",
-  "Labour Market": "#00b4d8",
-  "Automation": "#ff6b35",
-  "Executive Moves": "#a855f7",
-  "Compensation": "#f59e0b",
-  "Workforce Planning": "#ec4899",
-  "Skills": "#06b6d4",
-  "DEI": "#8b5cf6",
-};
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: #000;
+  color: #e8e8e8;
+  -webkit-font-smoothing: antialiased;
+}
 
-const STORAGE_KEY_LIKES = "tic-pulse-likes";
-const STORAGE_KEY_BOOKMARKS = "tic-pulse-bookmarks";
+#root {
+  min-height: 100dvh;
+}
 
-// ─── Local storage helpers ───
-
-function loadSet(key) {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? new Set(JSON.parse(raw)) : new Set();
-  } catch {
-    return new Set();
+@keyframes cardIn {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 
-function saveSet(key, set) {
-  try {
-    localStorage.setItem(key, JSON.stringify([...set]));
-  } catch {
-    // localStorage might be full or unavailable — degrade gracefully
+@keyframes fadeSlide {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 
-// ═══════════════════════════════════════════════
-//  APP
-// ═══════════════════════════════════════════════
-
-export default function App() {
-  // ─── State ───
-  const [articles, setArticles] = useState([]);  // Full unfiltered set
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [activeCategory, setActiveCategory] = useState("All");
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [activeTab, setActiveTab] = useState("feed");
-  const [shareTarget, setShareTarget] = useState(null);
-  const [toast, setToast] = useState({ msg: "", show: false });
-
-  // Newsletter curation (always-on selection)
-  const [selectedIds, setSelectedIds] = useState([]); // ordered array to preserve selection order
-  const [showNewsletter, setShowNewsletter] = useState(false);
-
-  // Engagement state (localStorage, Phase 1 — moves to Supabase in Phase 2 with auth)
-  const [likedIds, setLikedIds] = useState(() => loadSet(STORAGE_KEY_LIKES));
-  const [bookmarkedIds, setBookmarkedIds] = useState(() => loadSet(STORAGE_KEY_BOOKMARKS));
-
-  // Ref for likedIds — avoids stale closure in useCallback handlers
-  const likedIdsRef = useRef(likedIds);
-  useEffect(() => { likedIdsRef.current = likedIds; }, [likedIds]);
-
-  const searchInputRef = useRef(null);
-
-  // ─── Data Loading (always fetch full set, filter client-side) ───
-
-  const loadArticles = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const data = await fetchArticles({ limit: 100 });
-      setArticles(data);
-    } catch (err) {
-      console.error("Failed to load articles:", err);
-      setError("Failed to load articles. Check your connection.");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadArticles();
-  }, [loadArticles]);
-
-  // ─── Client-side filtering (avoids hammering Supabase on every keystroke) ───
-
-  const filteredArticles = useMemo(() => {
-    return articles.filter((a) => {
-      const matchesCategory = activeCategory === "All" || a.category === activeCategory;
-      if (!matchesCategory) return false;
-
-      if (searchQuery) {
-        const q = searchQuery.toLowerCase();
-        return (
-          (a.title || "").toLowerCase().includes(q) ||
-          (a.tldr || "").toLowerCase().includes(q) ||
-          (a.tags || []).some((t) => t.toLowerCase().includes(q)) ||
-          (a.category || "").toLowerCase().includes(q)
-        );
-      }
-
-      return true;
-    });
-  }, [articles, activeCategory, searchQuery]);
-
-  // Focus search input when opened
-  useEffect(() => {
-    if (searchOpen && searchInputRef.current) {
-      searchInputRef.current.focus();
-    }
-  }, [searchOpen]);
-
-  // ─── Toast ───
-
-  const showToast = useCallback((msg) => {
-    setToast({ msg, show: true });
-    setTimeout(() => setToast((t) => ({ ...t, show: false })), 2200);
-  }, []);
-
-  // ─── Engagement Handlers ───
-
-  const handleLike = useCallback(
-    (articleId) => {
-      setLikedIds((prev) => {
-        const next = new Set(prev);
-        const wasLiked = next.has(articleId);
-
-        if (wasLiked) {
-          next.delete(articleId);
-          incrementEngagement(articleId, "like_count", -1);
-        } else {
-          next.add(articleId);
-          incrementEngagement(articleId, "like_count", 1);
-        }
-
-        saveSet(STORAGE_KEY_LIKES, next);
-        return next;
-      });
-
-      // Optimistic UI: update local article count immediately
-      const wasLiked = likedIdsRef.current.has(articleId);
-      setArticles((prev) =>
-        prev.map((a) => {
-          if (a.id !== articleId) return a;
-          return { ...a, like_count: a.like_count + (wasLiked ? -1 : 1) };
-        })
-      );
-    },
-    []
-  );
-
-  const handleBookmark = useCallback(
-    (articleId) => {
-      setBookmarkedIds((prev) => {
-        const next = new Set(prev);
-        const wasBookmarked = next.has(articleId);
-
-        if (wasBookmarked) {
-          next.delete(articleId);
-        } else {
-          next.add(articleId);
-          showToast("Saved to bookmarks");
-        }
-
-        saveSet(STORAGE_KEY_BOOKMARKS, next);
-        return next;
-      });
-    },
-    [showToast]
-  );
-
-  const handleShare = useCallback(
-    (article) => {
-      setShareTarget(article);
-      incrementEngagement(article.id, "share_count", 1);
-    },
-    []
-  );
-
-  // ─── Curate Mode ───
-
-  const handleToggleSelect = useCallback((articleId) => {
-    setSelectedIds((prev) => {
-      if (prev.includes(articleId)) {
-        return prev.filter((id) => id !== articleId);
-      }
-      return [...prev, articleId];
-    });
-  }, []);
-
-  const handleOpenNewsletter = useCallback(() => {
-    if (selectedIds.length === 0) return;
-    setShowNewsletter(true);
-  }, [selectedIds]);
-
-  // Get selected articles in selection order (preserves user's curation order)
-  const selectedArticles = useMemo(() => {
-    const articleMap = new Map(articles.map((a) => [a.id, a]));
-    return selectedIds.map((id) => articleMap.get(id)).filter(Boolean);
-  }, [articles, selectedIds]);
-
-  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
-
-  // ─── Render ───
-
-  return (
-    <div
-      style={{
-        minHeight: "100dvh",
-        maxWidth: "480px",
-        margin: "0 auto",
-        position: "relative",
-        overflowX: "hidden",
-      }}
-    >
-      {/* Ambient glow */}
-      <div
-        style={{
-          position: "fixed",
-          top: "-120px",
-          left: "50%",
-          transform: "translateX(-50%)",
-          width: "500px",
-          height: "500px",
-          borderRadius: "50%",
-          background: "radial-gradient(circle, rgba(0,229,160,0.03) 0%, transparent 70%)",
-          pointerEvents: "none",
-          zIndex: 0,
-        }}
-      />
-
-      {/* ═══ HEADER ═══ */}
-      <Header
-        searchOpen={searchOpen}
-        searchQuery={searchQuery}
-        activeCategory={activeCategory}
-        searchInputRef={searchInputRef}
-        onToggleSearch={() => {
-          setSearchOpen(!searchOpen);
-          if (searchOpen) setSearchQuery("");
-        }}
-        onSearchChange={setSearchQuery}
-        onCategoryChange={(cat) => setActiveCategory(cat)}
-      />
-
-      {/* ═══ CONTENT ═══ */}
-      <main style={{ position: "relative", zIndex: 1 }}>
-        {activeTab === "feed" && (
-          <FeedView
-            articles={filteredArticles}
-            loading={loading}
-            error={error}
-            likedIds={likedIds}
-            bookmarkedIds={bookmarkedIds}
-            selectedIds={selectedIdSet}
-            onLike={handleLike}
-            onBookmark={handleBookmark}
-            onShare={handleShare}
-            onToggleSelect={handleToggleSelect}
-            onClearFilters={() => {
-              setActiveCategory("All");
-              setSearchQuery("");
-            }}
-            onSearchTag={(tag) => {
-              setSearchQuery(tag);
-              setSearchOpen(true);
-            }}
-            onRetry={loadArticles}
-          />
-        )}
-
-        {activeTab === "discover" && <DiscoverView articles={articles} onSearchTag={(tag) => { setSearchQuery(tag); setSearchOpen(true); setActiveTab("feed"); }} />}
-
-        {activeTab === "saved" && (
-          <SavedView
-            articles={articles}
-            likedIds={likedIds}
-            bookmarkedIds={bookmarkedIds}
-            onLike={handleLike}
-            onBookmark={handleBookmark}
-            onShare={handleShare}
-          />
-        )}
-
-        {activeTab === "community" && <CommunityView />}
-      </main>
-
-      {/* ═══ BOTTOM NAV ═══ */}
-      <BottomNav activeTab={activeTab} onTabChange={setActiveTab} />
-
-      {/* ═══ CURATE SELECTION BAR (appears when articles are selected) ═══ */}
-      {selectedIds.length > 0 && (
-        <div
-          style={{
-            position: "fixed",
-            bottom: "72px",
-            left: "50%",
-            transform: "translateX(-50%)",
-            width: "calc(100% - 24px)",
-            maxWidth: "456px",
-            zIndex: 150,
-            animation: "fadeSlide 0.3s cubic-bezier(0.16, 1, 0.3, 1)",
-          }}
-        >
-          <div
-            style={{
-              background: "rgba(20,20,22,0.95)",
-              backdropFilter: "blur(20px)",
-              WebkitBackdropFilter: "blur(20px)",
-              borderRadius: "18px",
-              border: "1px solid var(--border-hover)",
-              padding: "12px 16px",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              boxShadow: "0 8px 40px rgba(0,0,0,0.5)",
-            }}
-          >
-            <div>
-              <div style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-primary)" }}>
-                {selectedIds.length} article{selectedIds.length !== 1 ? "s" : ""} selected
-              </div>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "1px" }}>
-                Ready to build your briefing
-              </div>
-            </div>
-            <div style={{ display: "flex", gap: "8px" }}>
-              <button
-                onClick={() => setSelectedIds([])}
-                style={{
-                  background: "none",
-                  border: "1px solid var(--border)",
-                  borderRadius: "12px",
-                  color: "var(--text-muted)",
-                  padding: "10px 14px",
-                  fontSize: "12px",
-                  fontWeight: 600,
-                }}
-              >
-                Clear
-              </button>
-              <button
-                onClick={handleOpenNewsletter}
-                style={{
-                  background: "var(--accent)",
-                  border: "none",
-                  borderRadius: "12px",
-                  color: "#000",
-                  padding: "10px 18px",
-                  fontSize: "13px",
-                  fontWeight: 700,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "6px",
-                  transition: "all 0.2s",
-                }}
-              >
-                <NewsletterIcon size={16} />
-                Build
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ═══ OVERLAYS ═══ */}
-      <ShareSheet article={shareTarget} onClose={() => setShareTarget(null)} onToast={showToast} />
-      <Toast message={toast.msg} visible={toast.show} />
-
-      {/* ═══ NEWSLETTER BUILDER ═══ */}
-      {showNewsletter && (
-        <NewsletterBuilder
-          articles={selectedArticles}
-          onClose={() => setShowNewsletter(false)}
-          onToast={showToast}
-        />
-      )}
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════
-//  HEADER
-// ═══════════════════════════════════════════════
-
-function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, onToggleSearch, onSearchChange, onCategoryChange }) {
-  return (
-    <header
-      style={{
-        position: "sticky",
-        top: 0,
-        zIndex: 100,
-        background: "var(--bg-glass)",
-        backdropFilter: "blur(24px) saturate(1.8)",
-        WebkitBackdropFilter: "blur(24px) saturate(1.8)",
-        borderBottom: "1px solid var(--border)",
-      }}
-    >
-      {/* Top Row */}
-      <div style={{ padding: "10px 16px 0", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          {/* TIC Head Logo */}
-          <img src="/tic-head.png" alt="TIC" style={{ width: "34px", height: "34px", objectFit: "contain" }} />
-          <div>
-            <div style={{ display: "flex", alignItems: "baseline", gap: "6px" }}>
-              <h1
-                style={{
-                  fontSize: "22px",
-                  fontWeight: 800,
-                  margin: 0,
-                  fontFamily: "var(--font-display)",
-                  color: "#fff",
-                  letterSpacing: "-0.5px",
-                  animation: "textPulse 4s ease-in-out infinite",
-                }}
-              >
-                Pulse
-              </h1>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "4px",
-                  padding: "2px 7px",
-                  borderRadius: "6px",
-                  background: "var(--accent-muted)",
-                  border: "1px solid rgba(0,229,160,0.15)",
-                }}
-              >
-                <div
-                  style={{
-                    width: "5px",
-                    height: "5px",
-                    borderRadius: "50%",
-                    background: "var(--accent)",
-                    animation: "liveDot 2s ease infinite",
-                  }}
-                />
-                <span style={{ fontSize: "9px", fontWeight: 800, color: "var(--accent)", letterSpacing: "1px" }}>
-                  LIVE
-                </span>
-              </div>
-            </div>
-            <div style={{ fontSize: "9px", fontWeight: 700, color: "var(--text-muted)", letterSpacing: "2px", marginTop: "-1px" }}>
-              TALENT INTELLIGENCE COLLECTIVE
-            </div>
-          </div>
-        </div>
-
-        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-          <button
-            onClick={onToggleSearch}
-            aria-label={searchOpen ? "Close search" : "Open search"}
-            style={{
-              background: searchOpen ? "var(--accent-muted)" : "none",
-              border: "none",
-              color: searchOpen ? "var(--accent)" : "var(--text-muted)",
-              padding: "8px",
-              borderRadius: "12px",
-              display: "flex",
-              alignItems: "center",
-              transition: "all 0.2s",
-            }}
-          >
-            {searchOpen ? <CloseIcon size={18} /> : <SearchIcon />}
-          </button>
-          <button
-            aria-label="Notifications"
-            style={{
-              background: "none",
-              border: "none",
-              color: "var(--text-muted)",
-              padding: "8px",
-              borderRadius: "12px",
-              position: "relative",
-              display: "flex",
-              alignItems: "center",
-            }}
-          >
-            <BellIcon />
-            <div
-              style={{
-                position: "absolute",
-                top: "5px",
-                right: "5px",
-                width: "7px",
-                height: "7px",
-                borderRadius: "50%",
-                background: "var(--red)",
-                border: "2px solid var(--bg)",
-              }}
-            />
-          </button>
-        </div>
-      </div>
-
-      {/* Search Bar */}
-      {searchOpen && (
-        <div style={{ padding: "10px 16px 0", animation: "fadeSlide 0.2s ease" }}>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "10px",
-              background: "var(--bg-elevated)",
-              borderRadius: "var(--radius-md)",
-              padding: "0 14px",
-              border: "1px solid var(--border)",
-            }}
-          >
-            <SearchIcon size={16} />
-            <input
-              ref={searchInputRef}
-              value={searchQuery}
-              onChange={(e) => onSearchChange(e.target.value)}
-              placeholder="Search articles, topics, tags..."
-              style={{
-                flex: 1,
-                background: "none",
-                border: "none",
-                color: "#eee",
-                padding: "11px 0",
-                fontSize: "14px",
-                outline: "none",
-              }}
-            />
-            {searchQuery && (
-              <button
-                onClick={() => onSearchChange("")}
-                style={{
-                  background: "rgba(255,255,255,0.08)",
-                  border: "none",
-                  color: "#888",
-                  width: "20px",
-                  height: "20px",
-                  borderRadius: "50%",
-                  fontSize: "12px",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                ×
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Category Scroller */}
-      <div
-        style={{
-          display: "flex",
-          gap: "7px",
-          padding: "12px 16px 12px",
-          overflowX: "auto",
-          scrollbarWidth: "none",
-        }}
-      >
-        {CATEGORIES.map((cat) => {
-          const isActive = activeCategory === cat;
-          const color = cat === "All" ? "var(--accent)" : (CAT_COLORS[cat] || "var(--accent)");
-          return (
-            <button
-              key={cat}
-              onClick={() => onCategoryChange(cat)}
-              style={{
-                padding: "5px 14px",
-                borderRadius: "var(--radius-pill)",
-                whiteSpace: "nowrap",
-                fontSize: "11px",
-                fontWeight: 700,
-                letterSpacing: "0.3px",
-                border: isActive ? `1px solid ${typeof color === "string" && color.startsWith("#") ? color + "40" : "var(--accent-border)"}` : "1px solid var(--border)",
-                background: isActive ? (typeof color === "string" && color.startsWith("#") ? color + "12" : "var(--accent-muted)") : "var(--bg-card)",
-                color: isActive ? color : "var(--text-muted)",
-                transition: "all 0.25s ease",
-              }}
-            >
-              {cat}
-            </button>
-          );
-        })}
-      </div>
-    </header>
-  );
-}
-
-// ═══════════════════════════════════════════════
-//  FEED VIEW
-// ═══════════════════════════════════════════════
-
-function FeedView({ articles, loading, error, likedIds, bookmarkedIds, selectedIds, onLike, onBookmark, onShare, onToggleSelect, onClearFilters, onSearchTag, onRetry }) {
-  const hasSelections = selectedIds.size > 0;
-  return (
-    <div style={{ padding: hasSelections ? "12px 12px 180px" : "12px 12px 110px" }}>
-      {/* Trending Ticker */}
-      <TrendingTicker onTagClick={onSearchTag} />
-
-      {/* Loading */}
-      {loading && articles.length === 0 && <SkeletonCards />}
-
-      {/* Error */}
-      {error && (
-        <div style={{ textAlign: "center", padding: "48px 20px", animation: "fadeIn 0.3s" }}>
-          <p style={{ fontSize: "14px", color: "var(--red)", fontWeight: 500 }}>{error}</p>
-          <button
-            onClick={onRetry}
-            style={{
-              background: "var(--accent-muted)",
-              border: "1px solid var(--accent-border)",
-              color: "var(--accent)",
-              padding: "8px 20px",
-              borderRadius: "12px",
-              fontSize: "13px",
-              fontWeight: 600,
-              marginTop: "12px",
-            }}
-          >
-            Try again
-          </button>
-        </div>
-      )}
-
-      {/* Articles */}
-      {!loading && !error && articles.length === 0 && (
-        <div style={{ textAlign: "center", padding: "60px 20px", animation: "fadeIn 0.3s" }}>
-          <div style={{ fontSize: "40px", marginBottom: "12px", opacity: 0.5 }}>🔍</div>
-          <p style={{ fontSize: "15px", color: "var(--text-muted)", fontWeight: 500 }}>No articles match your filters</p>
-          <button
-            onClick={onClearFilters}
-            style={{
-              background: "var(--accent-muted)",
-              border: "1px solid var(--accent-border)",
-              color: "var(--accent)",
-              padding: "8px 20px",
-              borderRadius: "12px",
-              fontSize: "13px",
-              fontWeight: 600,
-              marginTop: "12px",
-            }}
-          >
-            Clear filters
-          </button>
-        </div>
-      )}
-
-      {articles.map((article, i) => (
-        <ArticleCard
-          key={article.id}
-          article={article}
-          index={i}
-          isLiked={likedIds.has(article.id)}
-          isBookmarked={bookmarkedIds.has(article.id)}
-          isSelected={selectedIds.has(article.id)}
-          onLike={onLike}
-          onBookmark={onBookmark}
-          onShare={onShare}
-          onToggleSelect={onToggleSelect}
-        />
-      ))}
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════
-//  TRENDING TICKER
-// ═══════════════════════════════════════════════
-
-const TRENDING_TAGS = [
-  { tag: "#AgenticAI", count: "2.4k" },
-  { tag: "#SkillsTaxonomy", count: "1.8k" },
-  { tag: "#CHROTurnover", count: "956" },
-  { tag: "#GreenJobs", count: "743" },
-  { tag: "#PayTransparency", count: "1.2k" },
-];
-
-function TrendingTicker({ onTagClick }) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: "10px",
-        padding: "10px 14px",
-        marginBottom: "14px",
-        background: "rgba(255,255,255,0.015)",
-        borderRadius: "var(--radius-md)",
-        border: "1px solid var(--border-subtle)",
-        overflowX: "auto",
-        scrollbarWidth: "none",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: "5px", color: "var(--accent)", flexShrink: 0 }}>
-        <TrendingIcon />
-        <span style={{ fontSize: "10px", fontWeight: 800, letterSpacing: "1.2px" }}>TRENDING</span>
-      </div>
-      <div style={{ width: "1px", height: "14px", background: "var(--border)", flexShrink: 0 }} />
-      {TRENDING_TAGS.map((t) => (
-        <button
-          key={t.tag}
-          onClick={() => onTagClick(t.tag.slice(1))}
-          style={{
-            background: "none",
-            border: "none",
-            color: "var(--text-muted)",
-            fontSize: "11px",
-            fontWeight: 600,
-            whiteSpace: "nowrap",
-            padding: "3px 6px",
-            borderRadius: "6px",
-            transition: "all 0.2s",
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.color = "var(--accent)";
-            e.currentTarget.style.background = "var(--accent-muted)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.color = "var(--text-muted)";
-            e.currentTarget.style.background = "none";
-          }}
-        >
-          {t.tag}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════
-//  SKELETON LOADING
-// ═══════════════════════════════════════════════
-
-function SkeletonCards() {
-  return (
-    <div style={{ animation: "fadeIn 0.3s" }}>
-      {[0, 1, 2].map((i) => (
-        <div
-          key={i}
-          style={{
-            background: "var(--bg-card)",
-            borderRadius: "var(--radius-xl)",
-            overflow: "hidden",
-            marginBottom: "16px",
-            border: "1px solid var(--border)",
-          }}
-        >
-          <div style={{ padding: "14px 18px", display: "flex", alignItems: "center", gap: "11px" }}>
-            <div className="skeleton" style={{ width: "34px", height: "34px", borderRadius: "10px" }} />
-            <div style={{ flex: 1 }}>
-              <div className="skeleton" style={{ width: "120px", height: "12px", marginBottom: "6px" }} />
-              <div className="skeleton" style={{ width: "80px", height: "10px" }} />
-            </div>
-          </div>
-          <div className="skeleton" style={{ width: "100%", height: "200px" }} />
-          <div style={{ padding: "14px 18px" }}>
-            <div className="skeleton" style={{ width: "60px", height: "10px", marginBottom: "10px" }} />
-            <div className="skeleton" style={{ width: "100%", height: "12px", marginBottom: "6px" }} />
-            <div className="skeleton" style={{ width: "85%", height: "12px", marginBottom: "6px" }} />
-            <div className="skeleton" style={{ width: "60%", height: "12px" }} />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════
-//  DISCOVER VIEW
-// ═══════════════════════════════════════════════
-
-function DiscoverView({ articles, onSearchTag }) {
-  // Count articles per category from live data
-  const categoryCounts = {};
-  for (const a of articles) {
-    if (a.category) {
-      categoryCounts[a.category] = (categoryCounts[a.category] || 0) + 1;
-    }
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
   }
-
-  return (
-    <div style={{ padding: "24px 16px 120px", animation: "fadeSlide 0.3s ease" }}>
-      <h2 style={{ fontSize: "24px", fontWeight: 700, color: "#fff", margin: "0 0 6px", fontFamily: "var(--font-display)" }}>
-        Discover
-      </h2>
-      <p style={{ fontSize: "13px", color: "var(--text-muted)", margin: "0 0 24px" }}>
-        Curated collections and trending topics
-      </p>
-
-      {/* Trending */}
-      <div style={{ marginBottom: "28px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "14px" }}>
-          <TrendingIcon />
-          <span style={{ fontSize: "12px", fontWeight: 800, color: "var(--accent)", letterSpacing: "1.5px", textTransform: "uppercase" }}>
-            Trending Now
-          </span>
-        </div>
-        {TRENDING_TAGS.map((t, i) => (
-          <div
-            key={t.tag}
-            onClick={() => onSearchTag(t.tag.slice(1))}
-            role="button"
-            tabIndex={0}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              padding: "14px 16px",
-              marginBottom: "8px",
-              background: "var(--bg-card)",
-              borderRadius: "var(--radius-md)",
-              border: "1px solid var(--border)",
-              cursor: "pointer",
-              transition: "all 0.2s",
-              animation: `cardIn 0.4s ease ${i * 0.05}s both`,
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = "var(--bg-card-hover)";
-              e.currentTarget.style.borderColor = "var(--border-hover)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "var(--bg-card)";
-              e.currentTarget.style.borderColor = "var(--border)";
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-              <span style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-faint)", width: "20px" }}>{i + 1}</span>
-              <div>
-                <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)" }}>{t.tag}</div>
-                <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>{t.count} posts</div>
-              </div>
-            </div>
-            <TrendingIcon size={16} />
-          </div>
-        ))}
-      </div>
-
-      {/* Collections by Category */}
-      <div>
-        <span style={{ fontSize: "12px", fontWeight: 800, color: "var(--text-secondary)", letterSpacing: "1.5px", textTransform: "uppercase" }}>
-          By Category
-        </span>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginTop: "14px" }}>
-          {Object.entries(CAT_COLORS).map(([cat, color], i) => (
-            <div
-              key={cat}
-              onClick={() => onSearchTag(cat)}
-              role="button"
-              tabIndex={0}
-              style={{
-                padding: "20px 16px",
-                borderRadius: "16px",
-                background: `${color}08`,
-                border: `1px solid ${color}15`,
-                cursor: "pointer",
-                transition: "all 0.2s",
-                animation: `cardIn 0.4s ease ${(i + 5) * 0.05}s both`,
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.borderColor = `${color}30`)}
-              onMouseLeave={(e) => (e.currentTarget.style.borderColor = `${color}15`)}
-            >
-              <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-primary)", marginBottom: "4px" }}>{cat}</div>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>{categoryCounts[cat] || 0} articles</div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
-// ═══════════════════════════════════════════════
-//  SAVED VIEW
-// ═══════════════════════════════════════════════
-
-function SavedView({ articles, likedIds, bookmarkedIds, onLike, onBookmark, onShare }) {
-  // Filter from full unfiltered article set — not affected by category/search filters
-  const savedArticles = articles.filter((a) => bookmarkedIds.has(a.id));
-
-  return (
-    <div style={{ padding: "24px 12px 120px", animation: "fadeSlide 0.3s ease" }}>
-      <div style={{ padding: "0 4px", marginBottom: "20px" }}>
-        <h2 style={{ fontSize: "24px", fontWeight: 700, color: "#fff", margin: "0 0 6px", fontFamily: "var(--font-display)" }}>
-          Saved
-        </h2>
-        <p style={{ fontSize: "13px", color: "var(--text-muted)", margin: 0 }}>
-          {savedArticles.length} article{savedArticles.length !== 1 ? "s" : ""} bookmarked
-        </p>
-      </div>
-
-      {savedArticles.length === 0 ? (
-        <div style={{ textAlign: "center", padding: "60px 20px" }}>
-          <div style={{ fontSize: "40px", marginBottom: "12px", opacity: 0.5 }}>🔖</div>
-          <p style={{ color: "var(--text-muted)", fontSize: "14px" }}>Bookmark articles to save them here</p>
-        </div>
-      ) : (
-        savedArticles.map((article, i) => (
-          <ArticleCard
-            key={article.id}
-            article={article}
-            index={i}
-            isLiked={likedIds.has(article.id)}
-            isBookmarked={bookmarkedIds.has(article.id)}
-            onLike={onLike}
-            onBookmark={onBookmark}
-            onShare={onShare}
-          />
-        ))
-      )}
-    </div>
-  );
+@keyframes liveDot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
 }
 
-// ═══════════════════════════════════════════════
-//  COMMUNITY VIEW (Phase 2 placeholder)
-// ═══════════════════════════════════════════════
-
-function CommunityView() {
-  return (
-    <div style={{ padding: "24px 16px 120px", animation: "fadeSlide 0.3s ease" }}>
-      <h2 style={{ fontSize: "24px", fontWeight: 700, color: "#fff", margin: "0 0 6px", fontFamily: "var(--font-display)" }}>
-        Community
-      </h2>
-      <p style={{ fontSize: "13px", color: "var(--text-muted)", margin: "0 0 32px" }}>
-        Connect with talent intelligence professionals
-      </p>
-      <div
-        style={{
-          textAlign: "center",
-          padding: "48px 24px",
-          background: "var(--bg-card)",
-          borderRadius: "var(--radius-lg)",
-          border: "1px dashed var(--border-hover)",
-        }}
-      >
-        <img src="/tic-logo-full.png" alt="TIC" style={{ width: "100px", opacity: 0.5, marginBottom: "16px" }} />
-        <p style={{ fontSize: "16px", fontWeight: 600, color: "var(--text-muted)", margin: "0 0 4px" }}>Coming in Phase 2</p>
-        <p style={{ fontSize: "13px", color: "var(--text-faint)", margin: 0 }}>
-          User profiles, direct messaging, and community features
-        </p>
-      </div>
-    </div>
-  );
+.fadeUp {
+  animation: fadeUp 0.35s ease both;
 }
 
-// ═══════════════════════════════════════════════
-//  BOTTOM NAV
-// ═══════════════════════════════════════════════
+.skeleton {
+  background: linear-gradient(90deg, #1a1a1a 0%, #2a2a2a 50%, #1a1a1a 100%);
+  background-size: 200% 100%;
+  animation: skeletonShine 1.2s ease-in-out infinite;
+}
 
-function BottomNav({ activeTab, onTabChange }) {
-  const tabs = [
-    { id: "feed", label: "Feed", Icon: FeedIcon },
-    { id: "discover", label: "Discover", Icon: DiscoverIcon },
-    { id: "saved", label: "Saved", Icon: () => <BookmarkIcon filled={false} size={22} /> },
-    { id: "community", label: "Community", Icon: PeopleIcon },
-  ];
+@keyframes skeletonShine {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
 
-  return (
-    <nav
-      style={{
-        position: "fixed",
-        bottom: 0,
-        left: "50%",
-        transform: "translateX(-50%)",
-        width: "100%",
-        maxWidth: "480px",
-        zIndex: 100,
-        background: "var(--bg-glass)",
-        backdropFilter: "blur(24px) saturate(1.8)",
-        WebkitBackdropFilter: "blur(24px) saturate(1.8)",
-        borderTop: "1px solid var(--border)",
-        display: "flex",
-        justifyContent: "space-around",
-        padding: "8px 0 env(safe-area-inset-bottom, 20px)",
-      }}
-    >
-      {tabs.map((tab) => {
-        const isActive = activeTab === tab.id;
-        return (
-          <button
-            key={tab.id}
-            onClick={() => onTabChange(tab.id)}
-            aria-label={tab.label}
-            style={{
-              background: "none",
-              border: "none",
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              gap: "3px",
-              color: isActive ? "var(--accent)" : "var(--text-faint)",
-              transition: "color 0.2s",
-              padding: "6px 12px",
-              position: "relative",
-            }}
-          >
-            {isActive && (
-              <div
-                style={{
-                  position: "absolute",
-                  top: "-8px",
-                  left: "50%",
-                  transform: "translateX(-50%)",
-                  width: "20px",
-                  height: "2px",
-                  borderRadius: "1px",
-                  background: "var(--accent)",
-                }}
-              />
-            )}
-            <tab.Icon size={22} />
-            <span style={{ fontSize: "9px", fontWeight: 700, letterSpacing: "0.5px" }}>{tab.label}</span>
-          </button>
-        );
-      })}
-    </nav>
-  );
+.settings-input {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid #333;
+  background: #0a0a0a;
+  color: #eee;
+  font-size: 14px;
+  outline: none;
+}
+
+.settings-input:focus {
+  border-color: var(--accent) !important;
+}
+
+.settings-input::placeholder {
+  color: #444;
 }

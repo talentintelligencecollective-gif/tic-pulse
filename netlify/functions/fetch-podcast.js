@@ -1,163 +1,136 @@
-// ═══════════════════════════════════════════════════════════════
-//  TIC PULSE — YouTube Channel Fetcher
-//  Scheduled Netlify function: runs daily at 06:30 UTC
-//  Fetches new videos from all active YouTube channel sources
-//  via YouTube Data API v3, applies keyword filtering for
-//  Tier S sources, and stores in Supabase.
-// ═══════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------
+// TIC Pulse — Podcast RSS fetcher
+// Scheduled via netlify.toml as `fetch-podcast` (daily 06:00 UTC).
+// Ingests episodes for active sources: type = podcast, rss_url set.
+// De-duplicates on (source_id, episode_guid).
+// -----------------------------------------------------------------
 
 import { createClient } from "@supabase/supabase-js";
 
-const supabase = createClient(
-  process.env.VITE_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
+const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+const ITEM_CAP = Math.min(
+  80,
+  Math.max(5, parseInt(process.env.PODCAST_RSS_ITEM_CAP || "40", 10) || 40)
 );
 
-const YT_API_KEY = process.env.YOUTUBE_API_KEY;
-const YT_BASE = "https://www.googleapis.com/youtube/v3";
+// ─── RSS helpers ───
 
-// ─── YouTube API Helpers ───
-
-// Get the uploads playlist ID for a channel
-async function getUploadsPlaylist(channelId) {
-  const url = `${YT_BASE}/channels?part=contentDetails&id=${channelId}&key=${YT_API_KEY}`;
-  const res = await fetch(url);
-  const data = await res.json();
-
-  if (!data.items || data.items.length === 0) return null;
-  return data.items[0].contentDetails.relatedPlaylists.uploads;
+function decodeBasicEntities(s) {
+  if (!s) return "";
+  return s
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/gi, "$1")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)))
+    .trim();
 }
 
-// Get ALL videos from a playlist (paginates through entire history)
-async function getPlaylistItems(playlistId) {
-  const allItems = [];
-  let pageToken = null;
-
-  do {
-    let url = `${YT_BASE}/playlistItems?part=snippet,contentDetails&playlistId=${playlistId}&maxResults=50&key=${YT_API_KEY}`;
-    if (pageToken) url += `&pageToken=${pageToken}`;
-
-    const res = await fetch(url);
-    const data = await res.json();
-
-    if (!data.items) break;
-
-    for (const item of data.items) {
-      allItems.push({
-        videoId: item.contentDetails.videoId,
-        title: item.snippet.title,
-        description: item.snippet.description,
-        publishedAt: item.snippet.publishedAt,
-        channelTitle: item.snippet.channelTitle,
-        thumbnail:
-          item.snippet.thumbnails?.maxres?.url ||
-          item.snippet.thumbnails?.high?.url ||
-          item.snippet.thumbnails?.medium?.url ||
-          item.snippet.thumbnails?.default?.url,
-      });
-    }
-
-    pageToken = data.nextPageToken || null;
-    console.log(`[fetch-youtube] Fetched page, ${allItems.length} videos so far...`);
-  } while (pageToken);
-
-  return allItems;
+function stripTags(s) {
+  return decodeBasicEntities(s).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 }
 
-// Get video details (duration, stats) for a batch of video IDs
-async function getVideoDetails(videoIds) {
-  if (videoIds.length === 0) return {};
+function extractFirst(block, tag) {
+  const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i");
+  const m = block.match(re);
+  return m ? m[1] : null;
+}
 
-  // YouTube API accepts max 50 IDs per request
-  const chunks = [];
-  for (let i = 0; i < videoIds.length; i += 50) {
-    chunks.push(videoIds.slice(i, i + 50));
+function extractEnclosureUrl(block) {
+  const m = block.match(/<enclosure[^>]+url=["']([^"']+)["']/i);
+  return m ? m[1] : null;
+}
+
+function extractMediaContentUrl(block) {
+  const m = block.match(/<media:content[^>]+url=["']([^"']+)["']/i);
+  return m ? m[1] : null;
+}
+
+function extractItunesDuration(block) {
+  const raw =
+    extractFirst(block, "itunes:duration") ||
+    extractFirst(block, "duration");
+  return raw ? decodeBasicEntities(raw).trim() : null;
+}
+
+function parseDurationSeconds(raw) {
+  if (!raw) return null;
+  const t = raw.trim();
+  if (/^\d+$/.test(t)) return parseInt(t, 10);
+  const parts = t.split(":").map((p) => parseInt(p, 10));
+  if (parts.some((n) => Number.isNaN(n))) return null;
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  return null;
+}
+
+function formatDuration(seconds) {
+  if (seconds == null || !Number.isFinite(seconds)) return null;
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  if (h > 0)
+    return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function parseRssItems(xml) {
+  const items = [];
+  const re = /<item[\s\S]*?<\/item>/gi;
+  let m;
+  while ((m = re.exec(xml)) !== null) items.push(m[0]);
+  return items;
+}
+
+function parseItem(block) {
+  const titleRaw = extractFirst(block, "title");
+  const title = titleRaw ? stripTags(titleRaw) : "";
+  const guidRaw = extractFirst(block, "guid");
+  const guid = guidRaw ? stripTags(guidRaw).slice(0, 500) : null;
+  const linkRaw = extractFirst(block, "link");
+  const link = linkRaw ? stripTags(linkRaw).slice(0, 2000) : null;
+  const pubRaw = extractFirst(block, "pubDate");
+  let published_at = null;
+  if (pubRaw) {
+    const d = new Date(decodeBasicEntities(pubRaw));
+    if (!Number.isNaN(d.getTime())) published_at = d.toISOString();
   }
+  const descRaw = extractFirst(block, "description") || extractFirst(block, "content:encoded");
+  const description = descRaw ? stripTags(descRaw).slice(0, 5000) : null;
 
-  const details = {};
-  for (const chunk of chunks) {
-    const url = `${YT_BASE}/videos?part=contentDetails,statistics&id=${chunk.join(",")}&key=${YT_API_KEY}`;
-    const res = await fetch(url);
-    const data = await res.json();
+  const audio_url =
+    extractEnclosureUrl(block) || extractMediaContentUrl(block) || null;
+  const durSec = parseDurationSeconds(extractItunesDuration(block));
+  const duration = formatDuration(durSec);
 
-    if (data.items) {
-      for (const item of data.items) {
-        details[item.id] = {
-          duration: item.contentDetails.duration, // ISO 8601
-          viewCount: parseInt(item.statistics.viewCount || 0),
-          likeCount: parseInt(item.statistics.likeCount || 0),
-          commentCount: parseInt(item.statistics.commentCount || 0),
-        };
-      }
-    }
-  }
+  const episode_guid =
+    guid ||
+    (link ? `link:${link}` : null) ||
+    (title ? `title:${title.slice(0, 200)}` : null);
 
-  return details;
+  return {
+    episode_guid,
+    title,
+    description,
+    published_at,
+    duration,
+    duration_seconds: durSec,
+    audio_url,
+    link,
+  };
 }
 
-// ─── Duration Parser (ISO 8601) ───
-function parseIsoDuration(iso) {
-  if (!iso) return { display: null, seconds: null };
-
-  const m = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
-  if (!m) return { display: iso, seconds: null };
-
-  const h = parseInt(m[1] || 0);
-  const min = parseInt(m[2] || 0);
-  const s = parseInt(m[3] || 0);
-  const total = h * 3600 + min * 60 + s;
-
-  let display;
-  if (h > 0) {
-    display = `${h}:${String(min).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-  } else {
-    display = `${min}:${String(s).padStart(2, "0")}`;
-  }
-
-  return { display, seconds: total };
-}
-
-// ─── Video Type Detection ───
-function detectVideoType(title, durationSeconds) {
-  const lower = title.toLowerCase();
-
-  // Shorts: under 61 seconds
-  if (durationSeconds && durationSeconds <= 61) return "short";
-
-  // Panel/roundtable
-  if (lower.includes("panel") || lower.includes("roundtable") || lower.includes("debate"))
-    return "panel";
-
-  // Event/conference recordings
-  if (
-    lower.includes("jamboree") ||
-    lower.includes("keynote") ||
-    lower.includes("conference") ||
-    lower.includes("summit") ||
-    lower.includes("event")
-  )
-    return "event";
-
-  // Podcast episodes
-  if (
-    lower.includes("podcast") ||
-    lower.includes("episode") ||
-    lower.match(/ep\.?\s*\d/) ||
-    lower.includes("interview with")
-  )
-    return "podcast";
-
-  return "video";
-}
-
-// ─── Keyword Matcher ───
 function matchKeywords(text, keywords, threshold) {
   if (!keywords || keywords.length === 0)
     return { matches: [], score: 0, pass: true };
-
   const lower = text.toLowerCase();
   const matches = keywords.filter((kw) => lower.includes(kw.toLowerCase()));
-
   return {
     matches,
     score: matches.length,
@@ -165,175 +138,154 @@ function matchKeywords(text, keywords, threshold) {
   };
 }
 
-// ─── Main Handler ───
-export default async function handler(req) {
-  if (!YT_API_KEY) {
+// ─── Handler ───
+
+export default async function handler() {
+  if (!supabaseUrl || !supabaseKey) {
     return new Response(
-      JSON.stringify({ error: "YOUTUBE_API_KEY not configured" }),
+      JSON.stringify({ error: "Supabase URL or service key not configured" }),
       { status: 500, headers: { "Content-Type": "application/json" } }
     );
   }
 
-  console.log("[fetch-youtube] Starting YouTube fetch...");
+  console.log("[fetch-podcast] Starting RSS ingest...");
 
   try {
-    // Get all active YouTube sources
     const { data: sources, error: srcErr } = await supabase
       .from("sources")
       .select("*")
-      .eq("type", "youtube")
+      .eq("type", "podcast")
       .eq("active", true)
-      .not("youtube_channel_id", "is", null);
+      .not("rss_url", "is", null);
 
     if (srcErr) throw srcErr;
-    if (!sources || sources.length === 0) {
+    if (!sources?.length) {
       return new Response(
-        JSON.stringify({ message: "No active YouTube sources with channel IDs" }),
+        JSON.stringify({ message: "No active podcast sources with rss_url" }),
         { status: 200, headers: { "Content-Type": "application/json" } }
       );
     }
 
-    console.log(`[fetch-youtube] Processing ${sources.length} YouTube channels`);
-
     let totalNew = 0;
     let totalSkipped = 0;
-    let totalFiltered = 0;
     const results = [];
 
     for (const source of sources) {
       try {
-        console.log(`[fetch-youtube] Fetching: ${source.name}`);
+        const feedUrl = source.rss_url;
+        console.log(`[fetch-podcast] Fetching RSS: ${source.name} (${feedUrl})`);
 
-        // Get or resolve uploads playlist
-        let playlistId = source.youtube_uploads_playlist;
-        if (!playlistId) {
-          playlistId = await getUploadsPlaylist(source.youtube_channel_id);
-          if (!playlistId) {
-            console.error(`[fetch-youtube] No uploads playlist for ${source.name}`);
-            results.push({ source: source.name, error: "No uploads playlist found" });
-            continue;
-          }
-          // Cache the playlist ID
-          await supabase
-            .from("sources")
-            .update({ youtube_uploads_playlist: playlistId })
-            .eq("id", source.id);
-        }
-
-        // Fetch recent videos
-        const videos = await getPlaylistItems(playlistId);
-        console.log(`[fetch-youtube] ${source.name}: found ${videos.length} videos`);
-
-        // Filter out already-stored videos
-        const newVideoIds = [];
-        for (const video of videos) {
-          const { data: existing } = await supabase
-            .from("videos")
-            .select("id")
-            .eq("youtube_id", video.videoId)
-            .maybeSingle();
-
-          if (!existing) {
-            newVideoIds.push(video.videoId);
-          }
-        }
-
-        if (newVideoIds.length === 0) {
-          results.push({ source: source.name, new: 0, skipped: videos.length });
-          totalSkipped += videos.length;
+        const res = await fetch(feedUrl, {
+          headers: { "User-Agent": "TIC-Pulse-PodcastFetcher/1.0" },
+        });
+        if (!res.ok) {
+          results.push({
+            source: source.name,
+            error: `HTTP ${res.status}`,
+          });
           continue;
         }
 
-        // Get details for new videos
-        const details = await getVideoDetails(newVideoIds);
+        const xml = await res.text();
+        if (!/<rss[\s>]/i.test(xml)) {
+          results.push({
+            source: source.name,
+            error: "Not an RSS 2.0 feed (missing <rss>)",
+          });
+          continue;
+        }
 
+        const rawItems = parseRssItems(xml).slice(0, ITEM_CAP);
         let sourceNew = 0;
-        let sourceFiltered = 0;
+        let sourceSkipped = 0;
 
-        for (const video of videos) {
-          if (!newVideoIds.includes(video.videoId)) continue;
+        for (const block of rawItems) {
+          const ep = parseItem(block);
+          if (!ep.episode_guid || !ep.title) {
+            sourceSkipped++;
+            continue;
+          }
+          if (!ep.audio_url) {
+            sourceSkipped++;
+            continue;
+          }
 
-          const detail = details[video.videoId] || {};
-          const dur = parseIsoDuration(detail.duration);
+          const { data: existing } = await supabase
+            .from("episodes")
+            .select("id")
+            .eq("source_id", source.id)
+            .eq("episode_guid", ep.episode_guid)
+            .maybeSingle();
 
-          // Keyword filtering for Tier S sources
+          if (existing) {
+            sourceSkipped++;
+            continue;
+          }
+
+          const searchText = `${ep.title} ${ep.description || ""}`;
+          let keyword_matches = [];
+          let keyword_score = 0;
           if (source.pull_mode === "keyword" && source.keywords?.length > 0) {
-            const searchText = `${video.title || ""} ${video.description || ""}`;
-            const kwResult = matchKeywords(
+            const kw = matchKeywords(
               searchText,
               source.keywords,
               source.keyword_threshold || 2
             );
-
-            if (!kwResult.pass) {
-              sourceFiltered++;
-              totalFiltered++;
+            if (!kw.pass) {
+              sourceSkipped++;
               continue;
             }
-
-            video._keywordMatches = kwResult.matches;
-            video._keywordScore = kwResult.score;
+            keyword_matches = kw.matches;
+            keyword_score = kw.score;
           }
 
-          // Detect video type
-          const videoType = detectVideoType(video.title, dur.seconds);
-
-          // Insert video
-          const { error: insertErr } = await supabase.from("videos").insert({
+          const { error: insertErr } = await supabase.from("episodes").insert({
             source_id: source.id,
-            youtube_id: video.videoId,
-            title: video.title,
-            description: (video.description || "").substring(0, 5000),
-            published_at: video.publishedAt,
-            duration: dur.display,
-            duration_seconds: dur.seconds,
-            thumbnail_url: video.thumbnail,
-            channel_title: video.channelTitle,
-            view_count: detail.viewCount || 0,
-            like_count: detail.likeCount || 0,
-            comment_count: detail.commentCount || 0,
-            video_type: videoType,
-            keyword_matches: video._keywordMatches || [],
-            keyword_score: video._keywordScore || 0,
+            episode_guid: ep.episode_guid,
+            title: ep.title.slice(0, 500),
+            description: ep.description,
+            published_at: ep.published_at,
+            duration: ep.duration,
+            duration_seconds: ep.duration_seconds,
+            audio_url: ep.audio_url,
+            link: ep.link,
+            keyword_matches,
+            keyword_score,
           });
 
           if (insertErr) {
-            if (insertErr.code === "23505") {
-              // Duplicate — race condition
-            } else {
+            if (insertErr.code === "23505") sourceSkipped++;
+            else
               console.error(
-                `[fetch-youtube] Insert error for ${video.title}:`,
+                `[fetch-podcast] Insert error ${source.name}:`,
                 insertErr.message
               );
-            }
           } else {
             sourceNew++;
           }
         }
 
-        // Update last_fetched_at
         await supabase
           .from("sources")
           .update({ last_fetched_at: new Date().toISOString() })
           .eq("id", source.id);
 
         totalNew += sourceNew;
-        totalSkipped += videos.length - newVideoIds.length;
-
+        totalSkipped += sourceSkipped;
         results.push({
           source: source.name,
           tier: source.tier,
           new: sourceNew,
-          skipped: videos.length - newVideoIds.length,
-          filtered: sourceFiltered,
+          skipped: sourceSkipped,
+          itemsSeen: rawItems.length,
         });
-
         console.log(
-          `[fetch-youtube] ${source.name}: ${sourceNew} new, ${videos.length - newVideoIds.length} existing, ${sourceFiltered} keyword-filtered`
+          `[fetch-podcast] ${source.name}: ${sourceNew} new, ${sourceSkipped} skipped`
         );
       } catch (err) {
-        console.error(`[fetch-youtube] Error processing ${source.name}:`, err.message);
-        results.push({ source: source.name, error: err.message });
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[fetch-podcast] Error ${source.name}:`, msg);
+        results.push({ source: source.name, error: msg });
       }
     }
 
@@ -342,26 +294,21 @@ export default async function handler(req) {
       sourcesProcessed: sources.length,
       totalNew,
       totalSkipped,
-      totalFiltered,
+      itemCap: ITEM_CAP,
       results,
     };
-
-    console.log("[fetch-youtube] Complete:", JSON.stringify(summary));
+    console.log("[fetch-podcast] Complete:", JSON.stringify(summary));
 
     return new Response(JSON.stringify(summary), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
   } catch (err) {
-    console.error("[fetch-youtube] Fatal error:", err);
-    return new Response(JSON.stringify({ error: err.message }), {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[fetch-podcast] Fatal:", msg);
+    return new Response(JSON.stringify({ error: msg }), {
       status: 500,
       headers: { "Content-Type": "application/json" },
     });
   }
 }
-
-// ─── Schedule: daily at 06:30 UTC ───
-export const config = {
-  schedule: "0 6 * * *",
-};

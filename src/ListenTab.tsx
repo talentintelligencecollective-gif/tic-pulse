@@ -4,7 +4,9 @@
 //  expandable descriptions, and platform links
 // ═══════════════════════════════════════════════════════════════
 
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef } from "react";
+import type { CSSProperties } from "react";
+import type { EpisodeRow, SourceRow } from "./useMultimedia";
 import { useEpisodes, useSources, formatRelativeDate } from "./useMultimedia";
 
 const T = {
@@ -18,21 +20,26 @@ const T = {
   mono: "'JetBrains Mono', monospace",
 };
 
-const tierColors = { "1": T.accent, "2": T.amber, "3": T.blue, S: T.purple };
+const tierColors: Record<string, string> = { "1": T.accent, "2": T.amber, "3": T.blue, S: T.purple };
 
 // ─── Waveform Animation ───
 function Waveform({ playing, color = T.accent }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 2, height: 18 }}>
       {[12, 18, 8, 16, 10, 14, 6].map((h, i) => (
-        <div key={i} style={{
-          width: 2.5, borderRadius: 2, background: color,
-          height: playing ? undefined : 4,
-          animation: playing ? `waveform 0.${4 + (i % 3)}s ease-in-out infinite` : "none",
-          animationDelay: playing ? `${i * 0.07}s` : undefined,
-          "--h": `${h}px`,
-          transition: "height 0.2s",
-        }}/>
+        <div
+          key={i}
+          style={{
+            width: 2.5,
+            borderRadius: 2,
+            background: color,
+            height: playing ? undefined : 4,
+            animation: playing ? `waveform 0.${4 + (i % 3)}s ease-in-out infinite` : "none",
+            animationDelay: playing ? `${i * 0.07}s` : undefined,
+            transition: "height 0.2s",
+            ["--h" as string]: `${h}px`,
+          } as CSSProperties}
+        />
       ))}
       <style>{`@keyframes waveform{0%,100%{height:4px;}50%{height:var(--h,16px);}}`}</style>
     </div>
@@ -40,8 +47,8 @@ function Waveform({ playing, color = T.accent }) {
 }
 
 // ─── Source Header Card ───
-function SourceHeader({ source }) {
-  const tc = tierColors[source.tier] || T.t3;
+function SourceHeader({ source }: { source: SourceRow }) {
+  const tc = tierColors[String(source.tier)] || T.t3;
   return (
     <div style={{
       display: "flex", gap: 12, alignItems: "center",
@@ -55,7 +62,7 @@ function SourceHeader({ source }) {
         border: `1px solid ${tc}30`,
         display: "flex", alignItems: "center", justifyContent: "center",
         fontSize: 18, fontFamily: T.sans, fontWeight: 700, color: tc,
-      }}>{source.name.charAt(0)}</div>
+      }}>{(source.name || "?").charAt(0)}</div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontFamily: T.font, fontSize: 14, color: T.t1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
           {source.name}
@@ -74,8 +81,20 @@ function SourceHeader({ source }) {
 }
 
 // ─── Episode Card ───
-function EpisodeCard({ episode, isPlaying, onPlay, isExpanded, onToggleExpand }) {
-  const tc = tierColors[episode.sources?.tier] || T.accent;
+function EpisodeCard({
+  episode,
+  isPlaying,
+  onPlay,
+  isExpanded,
+  onToggleExpand,
+}: {
+  episode: EpisodeRow;
+  isPlaying: boolean;
+  onPlay: () => void;
+  isExpanded: boolean;
+  onToggleExpand: () => void;
+}) {
+  const tc = tierColors[String(episode.sources?.tier)] || T.accent;
 
   return (
     <div style={{
@@ -117,7 +136,7 @@ function EpisodeCard({ episode, isPlaying, onPlay, isExpanded, onToggleExpand })
                 padding: "1px 5px", borderRadius: 3, background: `${tc}12`,
               }}>{episode.sources?.name || "Unknown"}</span>
               <span style={{ fontSize: 10, fontFamily: T.mono, color: T.t4 }}>
-                {formatRelativeDate(episode.published_at)}
+                {formatRelativeDate(episode.published_at ?? undefined)}
               </span>
               {isPlaying && <Waveform playing={true}/>}
             </div>
@@ -155,7 +174,7 @@ function EpisodeCard({ episode, isPlaying, onPlay, isExpanded, onToggleExpand })
             )}
 
             {/* Keyword matches (Tier S) */}
-            {episode.keyword_matches?.length > 0 && (
+            {(episode.keyword_matches?.length ?? 0) > 0 && (
               <div style={{ display: "flex", gap: 3, marginBottom: 6, flexWrap: "wrap" }}>
                 {episode.keyword_matches.map(kw => (
                   <span key={kw} style={{
@@ -171,7 +190,7 @@ function EpisodeCard({ episode, isPlaying, onPlay, isExpanded, onToggleExpand })
               {episode.duration && (
                 <span style={{ fontSize: 10, fontFamily: T.mono, color: T.t4 }}>⏱ {episode.duration}</span>
               )}
-              {episode.listen_count > 0 && (
+              {(episode.listen_count ?? 0) > 0 && (
                 <span style={{ fontSize: 10, fontFamily: T.mono, color: T.t4 }}>🎧 {episode.listen_count}</span>
               )}
               {episode.link && (
@@ -195,10 +214,10 @@ function EpisodeCard({ episode, isPlaying, onPlay, isExpanded, onToggleExpand })
 
 // ─── Main ListenTab ───
 export default function ListenTab() {
-  const [sourceFilter, setSourceFilter] = useState(null);
-  const [playing, setPlaying] = useState(null);
-  const [expanded, setExpanded] = useState(null);
-  const audioRef = useRef(null);
+  const [sourceFilter, setSourceFilter] = useState<string | null>(null);
+  const [playing, setPlaying] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const { episodes, loading } = useEpisodes({ limit: 80, sourceId: sourceFilter });
   const { sources } = useSources("podcast");
@@ -213,10 +232,11 @@ export default function ListenTab() {
       return;
     }
 
-    const ep = episodes.find(e => e.id === playing);
-    if (ep?.audio_url) {
+    const ep = episodes.find((e) => String(e.id) === playing);
+    const url = ep?.audio_url;
+    if (typeof url === "string" && url) {
       if (audioRef.current) audioRef.current.pause();
-      audioRef.current = new Audio(ep.audio_url);
+      audioRef.current = new Audio(url);
       audioRef.current.play().catch(() => {});
       audioRef.current.onended = () => setPlaying(null);
     }
@@ -238,28 +258,30 @@ export default function ListenTab() {
           background: !sourceFilter ? T.accent : T.bg3, color: !sourceFilter ? T.bg0 : T.t2,
           border: "none", cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
         }}>All Shows</button>
-        {sources.map(s => {
-          const tc = tierColors[s.tier] || T.t3;
+        {sources.map((s: SourceRow) => {
+          const sid = String(s.id ?? "");
+          const tc = tierColors[String(s.tier)] || T.t3;
+          const name = String(s.name ?? "");
           return (
-            <button key={s.id} onClick={() => setSourceFilter(sourceFilter === s.id ? null : s.id)} style={{
+            <button key={sid} onClick={() => setSourceFilter(sourceFilter === sid ? null : sid)} style={{
               padding: "6px 12px", borderRadius: 20, fontSize: 11, fontFamily: T.sans, fontWeight: 600,
-              background: sourceFilter === s.id ? tc : T.bg3,
-              color: sourceFilter === s.id ? T.bg0 : T.t2,
+              background: sourceFilter === sid ? tc : T.bg3,
+              color: sourceFilter === sid ? T.bg0 : T.t2,
               border: "none", cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
-            }}>{s.name.length > 22 ? s.name.substring(0, 20) + "…" : s.name}</button>
+            }}>{name.length > 22 ? name.substring(0, 20) + "…" : name}</button>
           );
         })}
       </div>
 
       {/* Selected source header */}
-      {sourceFilter && sources.find(s => s.id === sourceFilter) && (
+      {sourceFilter && sources.find((s) => String(s.id) === sourceFilter) && (
         <div style={{ padding: "0 16px 12px" }}>
-          <SourceHeader source={sources.find(s => s.id === sourceFilter)} />
+          <SourceHeader source={sources.find((s) => String(s.id) === sourceFilter) as SourceRow} />
         </div>
       )}
 
       {/* Platform links (shown when no source filter or TIC selected) */}
-      {(!sourceFilter || sources.find(s => s.id === sourceFilter)?.tier === "1") && (
+      {(!sourceFilter || sources.find((s) => String(s.id) === sourceFilter)?.tier === "1") && (
         <div style={{ display: "flex", gap: 6, padding: "0 16px 14px", justifyContent: "center" }}>
           {["Spotify", "Apple Podcasts", "YouTube", "RSS"].map(p => (
             <button key={p} style={{
@@ -267,8 +289,16 @@ export default function ListenTab() {
               background: T.bg3, color: T.t3, border: `1px solid ${T.border}`,
               cursor: "pointer", transition: "all 0.2s",
             }}
-              onMouseEnter={e => { e.target.style.borderColor = T.accent; e.target.style.color = T.accent; }}
-              onMouseLeave={e => { e.target.style.borderColor = T.border; e.target.style.color = T.t3; }}
+              onMouseEnter={(e) => {
+                const el = e.currentTarget;
+                el.style.borderColor = T.accent;
+                el.style.color = T.accent;
+              }}
+              onMouseLeave={(e) => {
+                const el = e.currentTarget;
+                el.style.borderColor = T.border;
+                el.style.color = T.t3;
+              }}
             >{p}</button>
           ))}
         </div>
@@ -284,16 +314,19 @@ export default function ListenTab() {
       {/* Episode list */}
       {!loading && (
         <div style={{ padding: "0 16px", display: "flex", flexDirection: "column", gap: 8 }}>
-          {episodes.map(ep => (
+          {episodes.map((ep) => {
+            const eid = String(ep.id ?? "");
+            return (
             <EpisodeCard
-              key={ep.id}
+              key={eid}
               episode={ep}
-              isPlaying={playing === ep.id}
-              onPlay={() => setPlaying(playing === ep.id ? null : ep.id)}
-              isExpanded={expanded === ep.id}
-              onToggleExpand={() => setExpanded(expanded === ep.id ? null : ep.id)}
+              isPlaying={playing === eid}
+              onPlay={() => setPlaying(playing === eid ? null : eid)}
+              isExpanded={expanded === eid}
+              onToggleExpand={() => setExpanded(expanded === eid ? null : eid)}
             />
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -314,7 +347,12 @@ export default function ListenTab() {
           {[
             { label: "Shows", value: sources.filter(s => s.active).length },
             { label: "Episodes", value: episodes.length },
-            { label: "Total Hours", value: Math.round(episodes.reduce((sum, e) => sum + (e.duration_seconds || 0), 0) / 3600) },
+            {
+              label: "Total Hours",
+              value: Math.round(
+                episodes.reduce((sum, e) => sum + Number(e.duration_seconds ?? 0), 0) / 3600
+              ),
+            },
           ].map(s => (
             <div key={s.label} style={{ textAlign: "center" }}>
               <div style={{ fontSize: 16, fontFamily: T.font, color: T.t1 }}>{s.value}</div>

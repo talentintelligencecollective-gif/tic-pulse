@@ -4,6 +4,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 import { useState, useMemo } from "react";
+import type { VideoRow, SourceRow } from "./useMultimedia";
 import { useVideos, useSources, formatRelativeDate, formatViewCount } from "./useMultimedia";
 
 // Design tokens (import from your main tokens file or inline)
@@ -26,17 +27,24 @@ const typeLabels = {
   podcast: "Podcast", event: "Event", panel: "Panel",
   short: "Short", video: "Video",
 };
-const tierColors = { "1": T.accent, "2": T.amber, "3": T.blue, S: T.purple };
+const tierColors: Record<string, string> = { "1": T.accent, "2": T.amber, "3": T.blue, S: T.purple };
 
 // ─── Video Thumbnail ───
-function VideoThumb({ video, onClick }) {
-  const tc = typeColors[video.video_type] || T.t3;
+function VideoThumb({
+  video,
+  onClick,
+}: {
+  video: VideoRow;
+  onClick: () => void;
+}) {
+  const vt = String(video.video_type ?? "video");
+  const tc = typeColors[vt] || T.t3;
   const gradients = {
     podcast: ["#0a2a1f", "#0d3d2e"], event: ["#2a1a0a", "#3d2e0d"],
     panel: ["#1a0a2a", "#2e0d3d"], short: ["#0a1a2a", "#0d2e3d"],
     video: ["#0a0a1a", "#0d0d2e"],
   };
-  const [c1, c2] = gradients[video.video_type] || gradients.video;
+  const [c1, c2] = gradients[vt] || gradients.video;
 
   return (
     <div onClick={onClick} style={{
@@ -57,7 +65,7 @@ function VideoThumb({ video, onClick }) {
       }}>
         {!video.thumbnail_url && (
           <div style={{ fontSize: 10, fontFamily: T.mono, color: tc, fontWeight: 600, letterSpacing: 1.5, textTransform: "uppercase" }}>
-            {typeLabels[video.video_type] || "Video"}
+            {typeLabels[vt as keyof typeof typeLabels] || "Video"}
           </div>
         )}
         {/* Duration badge */}
@@ -74,7 +82,7 @@ function VideoThumb({ video, onClick }) {
           padding: "2px 6px", borderRadius: 4, fontSize: 9, fontFamily: T.mono,
           fontWeight: 700, textTransform: "uppercase", letterSpacing: 1,
           background: `${tc}25`, color: tc,
-        }}>{typeLabels[video.video_type] || "Video"}</div>
+        }}>{typeLabels[vt as keyof typeof typeLabels] || "Video"}</div>
         {/* Play overlay */}
         <div style={{
           position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
@@ -110,8 +118,15 @@ function VideoThumb({ video, onClick }) {
 }
 
 // ─── Video Detail View ───
-function VideoDetail({ video, onBack }) {
-  const tc = typeColors[video.video_type] || T.t3;
+function VideoDetail({
+  video,
+  onBack,
+}: {
+  video: VideoRow;
+  onBack: () => void;
+}) {
+  const vt = String(video.video_type ?? "video");
+  const tc = typeColors[vt] || T.t3;
 
   return (
     <div className="fadeUp" style={{ padding: "0 16px" }}>
@@ -134,12 +149,12 @@ function VideoDetail({ video, onBack }) {
               fontSize: 9, fontFamily: T.mono, padding: "3px 8px", borderRadius: 4,
               background: `${tc}20`, color: tc, fontWeight: 700,
               textTransform: "uppercase", letterSpacing: 1,
-            }}>{typeLabels[video.video_type] || "Video"}</span>
+            }}>{typeLabels[vt as keyof typeof typeLabels] || "Video"}</span>
             {video.sources?.tier && (
               <span style={{
                 fontSize: 9, fontFamily: T.mono, padding: "3px 8px", borderRadius: 4,
-                background: `${tierColors[video.sources.tier]}15`,
-                color: tierColors[video.sources.tier],
+                background: `${tierColors[String(video.sources.tier)]}15`,
+                color: tierColors[String(video.sources.tier)],
                 fontWeight: 600, letterSpacing: 1,
               }}>TIER {video.sources.tier}</span>
             )}
@@ -185,8 +200,8 @@ function VideoDetail({ video, onBack }) {
               maxHeight: 120, overflow: "hidden", position: "relative",
               padding: "10px 12px", background: T.bg3, borderRadius: 8,
             }}>
-              {video.description.substring(0, 400)}
-              {video.description.length > 400 && "..."}
+              {String(video.description).substring(0, 400)}
+              {String(video.description).length > 400 && "..."}
               <div style={{
                 position: "absolute", bottom: 0, left: 0, right: 0, height: 40,
                 background: `linear-gradient(transparent, ${T.bg3})`,
@@ -231,15 +246,15 @@ function VideoDetail({ video, onBack }) {
 // ─── Main WatchTab ───
 export default function WatchTab() {
   const [typeFilter, setTypeFilter] = useState("all");
-  const [sourceFilter, setSourceFilter] = useState(null);
-  const [selected, setSelected] = useState(null);
+  const [sourceFilter, setSourceFilter] = useState<string | null>(null);
+  const [selected, setSelected] = useState<VideoRow | null>(null);
 
   const { videos, loading } = useVideos({ limit: 60, type: typeFilter === "all" ? null : typeFilter, sourceId: sourceFilter });
   const { sources } = useSources("youtube");
 
   // Unique video types present in data
   const types = useMemo(() => {
-    const t = new Set(videos.map(v => v.video_type));
+    const t = new Set(videos.map((v) => String(v.video_type ?? "video")));
     return ["all", ...Array.from(t)];
   }, [videos]);
 
@@ -271,15 +286,20 @@ export default function WatchTab() {
             border: `1px solid ${!sourceFilter ? T.borderLight : T.border}`,
             whiteSpace: "nowrap", cursor: "pointer",
           }}>All sources</button>
-          {sources.map(s => (
-            <button key={s.id} onClick={() => setSourceFilter(sourceFilter === s.id ? null : s.id)} style={{
+          {sources.map((s: SourceRow) => {
+            const sid = String(s.id ?? "");
+            const stier = String(s.tier ?? "3");
+            const tierC = tierColors[stier] ?? T.t3;
+            return (
+            <button key={sid} onClick={() => setSourceFilter(sourceFilter === sid ? null : sid)} style={{
               padding: "4px 10px", borderRadius: 14, fontSize: 10, fontFamily: T.mono,
-              background: sourceFilter === s.id ? `${tierColors[s.tier]}20` : T.bg3,
-              color: sourceFilter === s.id ? tierColors[s.tier] : T.t4,
-              border: `1px solid ${sourceFilter === s.id ? `${tierColors[s.tier]}40` : T.border}`,
+              background: sourceFilter === sid ? `${tierC}20` : T.bg3,
+              color: sourceFilter === sid ? tierC : T.t4,
+              border: `1px solid ${sourceFilter === sid ? `${tierC}40` : T.border}`,
               whiteSpace: "nowrap", cursor: "pointer",
-            }}>{s.name}</button>
-          ))}
+            }}>{String(s.name ?? "")}</button>
+            );
+          })}
         </div>
       )}
 
@@ -323,7 +343,12 @@ export default function WatchTab() {
           {[
             { label: "Channels", value: sources.filter(s => s.active).length },
             { label: "Videos", value: videos.length },
-            { label: "Total Views", value: formatViewCount(videos.reduce((sum, v) => sum + (v.view_count || 0), 0)) },
+            {
+              label: "Total Views",
+              value: formatViewCount(
+                videos.reduce((sum, v) => sum + Number(v.view_count ?? 0), 0)
+              ),
+            },
           ].map(s => (
             <div key={s.label} style={{ textAlign: "center" }}>
               <div style={{ fontSize: 16, fontFamily: T.font, color: T.t1 }}>{s.value}</div>

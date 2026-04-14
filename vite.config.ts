@@ -1,10 +1,15 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
+  test: {
+    environment: "jsdom",
+    include: ["src/**/*.test.ts"],
+  },
   build: {
-    target: "es2020",
+    target: "es2022",
     outDir: "dist",
     sourcemap: false,
     minify: "esbuild",
@@ -18,6 +23,12 @@ export default defineConfig({
   },
   server: {
     port: 5173,
-    open: true,
+    open: process.env.CI ? false : true,
+    proxy: {
+      "/.netlify/functions": {
+        target: "http://localhost:8888",
+        changeOrigin: true,
+      },
+    },
   },
 });

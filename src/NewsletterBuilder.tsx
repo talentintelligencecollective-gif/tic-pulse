@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { generateNewsletterHtml, NEWSLETTER_THEMES } from "./emailTemplate.js";
-import { supabase } from "./supabase.js";
+import type { CSSProperties } from "react";
+import { generateNewsletterHtml, NEWSLETTER_THEMES } from "./emailTemplate";
+import { supabase } from "./supabase";
 
 // ─── Supabase helpers (inline to keep imports clean) ───
 
@@ -282,7 +283,7 @@ export default function NewsletterBuilder({ articles = [], videos = [], episodes
     setTimeout(() => window.open(`mailto:?subject=${subject}&body=${body}`, "_self"), 500);
   };
 
-  const inputStyle = {
+  const inputStyle: CSSProperties = {
     width: "100%", padding: "12px 14px", borderRadius: "12px",
     border: "1px solid #333", background: "#111", color: "#eee",
     fontSize: "14px", outline: "none", fontFamily: "inherit", boxSizing: "border-box",
@@ -292,7 +293,7 @@ export default function NewsletterBuilder({ articles = [], videos = [], episodes
     <div style={{
       position: "fixed", inset: 0, zIndex: 2000, background: "#000",
       display: "flex", flexDirection: "column", maxWidth: "480px", margin: "0 auto",
-    }}>
+    } as CSSProperties}>
       <style>{`
         @keyframes nbFade { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
         @keyframes nbPulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }

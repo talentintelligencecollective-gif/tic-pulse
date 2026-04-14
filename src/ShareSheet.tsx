@@ -1,4 +1,4 @@
-import { CopyIcon } from "./Icons.jsx";
+import { CopyIcon } from "./Icons";
 
 export default function ShareSheet({ article, onClose, onToast }) {
   if (!article) return null;
