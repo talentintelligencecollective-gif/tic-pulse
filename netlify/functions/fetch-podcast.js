@@ -227,6 +227,9 @@ export default async function handler() {
         const rawItems = parseRssItems(xml).slice(0, ITEM_CAP);
         let sourceNew = 0;
         let sourceSkipped = 0;
+        let insertFailCount = 0;
+        const insertFailSamples = [];
+        let loggedDedupeLookupError = false;
 
         for (const block of rawItems) {
           const ep = parseItem(block);
@@ -239,12 +242,26 @@ export default async function handler() {
             continue;
           }
 
-          const { data: existing } = await supabase
+          const { data: existing, error: existingErr } = await supabase
             .from("episodes")
             .select("id")
             .eq("source_id", source.id)
             .eq("episode_guid", ep.episode_guid)
             .maybeSingle();
+
+          if (existingErr) {
+            if (!loggedDedupeLookupError) {
+              loggedDedupeLookupError = true;
+              console.warn({
+                event: "PODCAST_EPISODE_DEDUPE_LOOKUP_FAILED",
+                source: source.name,
+                message: existingErr.message,
+                code: existingErr.code ?? null,
+              });
+            }
+            sourceSkipped++;
+            continue;
+          }
 
           if (existing) {
             sourceSkipped++;
@@ -284,14 +301,23 @@ export default async function handler() {
 
           if (insertErr) {
             if (insertErr.code === "23505") sourceSkipped++;
-            else
-              console.error(
-                `[fetch-podcast] Insert error ${source.name}:`,
-                insertErr.message
-              );
+            else {
+              insertFailCount++;
+              if (insertFailSamples.length < 3)
+                insertFailSamples.push(insertErr.message);
+            }
           } else {
             sourceNew++;
           }
+        }
+
+        if (insertFailCount > 0) {
+          console.warn({
+            event: "PODCAST_INSERT_ERRORS",
+            source: source.name,
+            failedInserts: insertFailCount,
+            sampleMessages: insertFailSamples,
+          });
         }
 
         await supabase
@@ -307,13 +333,19 @@ export default async function handler() {
           new: sourceNew,
           skipped: sourceSkipped,
           itemsSeen: rawItems.length,
+          ...(insertFailCount > 0 ? { insertErrors: insertFailCount } : {}),
         });
         console.log(
           `[fetch-podcast] ${source.name}: ${sourceNew} new, ${sourceSkipped} skipped`
         );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.error(`[fetch-podcast] Error ${source.name}:`, msg);
+        console.warn({
+          event: "PODCAST_SOURCE_FAILED",
+          source: source.name,
+          message: msg,
+          name: err instanceof Error ? err.name : "unknown",
+        });
         results.push({ source: source.name, error: msg });
       }
     }
