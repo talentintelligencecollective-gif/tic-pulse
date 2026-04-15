@@ -17,6 +17,15 @@ const ITEM_CAP = Math.min(
   Math.max(5, parseInt(process.env.PODCAST_RSS_ITEM_CAP || "40", 10) || 40)
 );
 
+/** Many podcast hosts return 403/429 to generic bot UAs; match a normal browser. */
+const RSS_FETCH_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
+const RSS_FETCH_TIMEOUT_MS = Math.min(
+  60000,
+  Math.max(8000, parseInt(process.env.PODCAST_RSS_FETCH_TIMEOUT_MS || "25000", 10) || 25000)
+);
+
 // ─── RSS helpers ───
 
 function decodeBasicEntities(s) {
@@ -176,17 +185,37 @@ export default async function handler() {
         console.log(`[fetch-podcast] Fetching RSS: ${source.name} (${feedUrl})`);
 
         const res = await fetch(feedUrl, {
-          headers: { "User-Agent": "TIC-Pulse-PodcastFetcher/1.0" },
+          headers: {
+            "User-Agent": RSS_FETCH_UA,
+            Accept: "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.1",
+            "Accept-Language": "en-US,en;q=0.9",
+          },
+          redirect: "follow",
+          signal: AbortSignal.timeout(RSS_FETCH_TIMEOUT_MS),
         });
         if (!res.ok) {
+          const errMsg = `HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ""}`;
+          console.warn({
+            event: "PODCAST_RSS_HTTP_ERROR",
+            source: source.name,
+            feedUrl: feedUrl.slice(0, 120),
+            status: res.status,
+          });
           results.push({
             source: source.name,
-            error: `HTTP ${res.status}`,
+            error: errMsg,
           });
           continue;
         }
 
         const xml = await res.text();
+        if (/<feed[\s>]/i.test(xml) && /xmlns[^>]*atom/i.test(xml)) {
+          results.push({
+            source: source.name,
+            error: "Atom feed not supported (RSS 2.0 only)",
+          });
+          continue;
+        }
         if (!/<rss[\s>]/i.test(xml)) {
           results.push({
             source: source.name,
