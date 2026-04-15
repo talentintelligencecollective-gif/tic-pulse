@@ -2,12 +2,12 @@
 //  Shared helpers: Google News image denylist + publisher URL decode
 //  Modern RSS uses /rss/articles/<token>; gdelt_url stays on news.google.com
 //  until decoded (verified: decoder resolves to publisher article URL).
+//
+//  Use a static import (not createRequire): Netlify esbuild must see the
+//  dependency or it will not ship google-news-url-decoder in the bundle.
 // ═══════════════════════════════════════════════════════════════
 
-import { createRequire } from "module";
-
-const require = createRequire(import.meta.url);
-const { GoogleDecoder } = require("google-news-url-decoder");
+import { GoogleDecoder } from "google-news-url-decoder";
 
 const decoder = new GoogleDecoder();
 
