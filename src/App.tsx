@@ -411,7 +411,7 @@ function Header({ searchOpen, searchQuery, activeCategory, searchInputRef, user,
     <header style={{ position: "sticky", top: 0, zIndex: 100, background: "#000", borderBottom: "1px solid #222" }}>
       <div style={{ padding: "10px 16px 0", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <img src="/tic-head.png" alt="TIC" style={{ width: "34px", height: "34px", objectFit: "contain" }} />
+          <img src="/tic-logo-full2.png" alt="TIC" style={{ width: "34px", height: "34px", objectFit: "contain" }} />
           <div>
             <div style={{ display: "flex", alignItems: "baseline", gap: "6px" }}>
               <h1 style={{ fontSize: "22px", fontWeight: 800, margin: 0, fontFamily: "Georgia, serif", color: "#fff", letterSpacing: "-0.5px" }}>Pulse</h1>

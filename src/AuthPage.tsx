@@ -42,7 +42,7 @@ export default function AuthPage({ onAuth }) {
       <style>{`@keyframes fadeSlide { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } } input::placeholder { color: #4b5563; } input:focus { border-color: rgba(0,229,160,0.4) !important; }`}</style>
 
       <div style={{ textAlign: "center", marginBottom: "40px", animation: "fadeSlide 0.5s ease" }}>
-        <img src="/tic-head.png" alt="TIC" style={{ width: "48px", height: "48px", objectFit: "contain", marginBottom: "16px" }} />
+        <img src="/tic-logo-full2.png" alt="TIC" style={{ width: "48px", height: "48px", objectFit: "contain", marginBottom: "16px" }} />
         <h1 style={{ fontSize: "32px", fontWeight: 800, color: "#fff", margin: "0 0 4px", fontFamily: "'Playfair Display', Georgia, serif", letterSpacing: "-0.5px" }}>Pulse</h1>
         <p style={{ fontSize: "10px", fontWeight: 700, color: "#4b5563", letterSpacing: "2.5px", margin: 0 }}>TALENT INTELLIGENCE COLLECTIVE</p>
       </div>

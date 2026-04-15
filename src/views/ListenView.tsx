@@ -240,7 +240,7 @@ export function ListenView({
 
       <div style={{ display: "flex", gap: 14, alignItems: "center", padding: "14px 16px", background: "#111", borderRadius: 16, border: "1px solid #222", marginBottom: 14 }}>
         <div style={{ width: 56, height: 56, borderRadius: 12, flexShrink: 0, background: "linear-gradient(135deg, rgba(0,229,160,0.1), rgba(0,180,216,0.1))", border: "1px solid rgba(0,229,160,0.2)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <img src="/tic-head.png" alt="TIC" style={{ width: 34, height: 34, objectFit: "contain" }} />
+          <img src="/tic-logo-full2.png" alt="TIC" style={{ width: 34, height: 34, objectFit: "contain" }} />
         </div>
         <div>
           <h2 style={{ fontSize: 18, fontWeight: 700, color: "#fff", margin: "0 0 2px", fontFamily: "Georgia, serif" }}>TIC Podcast Network</h2>

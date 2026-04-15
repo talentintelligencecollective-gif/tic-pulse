@@ -11,7 +11,7 @@ const CACHE_NAME = "tic-pulse-v2";
 // won't treat the site as a valid PWA (shortcut instead of app)
 const SHELL_ASSETS = [
   "/",
-  "/tic-head.png",
+  "/tic-logo-full2.png",
 ];
 
 // Install: cache app shell
