@@ -8,6 +8,11 @@
 // ═══════════════════════════════════════════════════════════════
 
 import { createClient } from "@supabase/supabase-js";
+import {
+  extractOgImageFromHtml,
+  isGoogleNewsBoilerplateImage,
+  resolvePublisherArticleUrl,
+} from "./lib/article-image.mjs";
 
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -206,12 +211,14 @@ async function fetchRssForPairs(pairs) {
         if (seenUrls.has(item.url)) continue;
         if (!isFreshEnough(item.pubDate)) continue;
         seenUrls.add(item.url);
+        const rssImage =
+          item.image && !isGoogleNewsBoilerplateImage(item.image) ? item.image : null;
         allArticles.push({
           gdelt_url: item.url,
           title: item.title,
           source_name: item.source,
-          source_domain: extractDomain(item.url),
-          image_url: item.image || null,
+          source_domain: item.source_domain || extractDomain(item.url),
+          image_url: rssImage,
           gdelt_tone: null,
           language: "English",
           published_at: item.pubDate || new Date().toISOString(),
@@ -237,6 +244,7 @@ function parseRssXml(xml) {
     const link = extractTag(x, "link");
     const pubDate = extractTag(x, "pubDate");
     const source = extractTag(x, "source");
+    const sourceUrlAttr = x.match(/<source[^>]+url=["']([^"']+)["']/i);
 
     // Try to extract image from RSS media tags
     let image = null;
@@ -247,10 +255,16 @@ function parseRssXml(xml) {
 
     if (title && link) {
       const realUrl = extractRealUrl(link);
+      let sourceDomain = extractDomain(realUrl);
+      if (!sourceDomain || sourceDomain === "news.google.com") {
+        const pub = sourceUrlAttr?.[1] ? extractDomain(sourceUrlAttr[1]) : null;
+        if (pub) sourceDomain = pub;
+      }
       items.push({
         title: decodeEntities(title),
         url: realUrl,
         source: source ? decodeEntities(source) : extractSourceFromUrl(realUrl),
+        source_domain: sourceDomain,
         pubDate: pubDate ? new Date(pubDate).toISOString() : null,
         image,
       });
@@ -344,7 +358,7 @@ async function summariseArticles(supabase) {
 
   // Fetch a pool of 50 unsummarised articles
   const { data: pool, error } = await supabase.from("articles")
-    .select("id, title, source_name, source_domain, gdelt_url")
+    .select("id, title, source_name, source_domain, gdelt_url, article_url, image_url")
     .eq("summarised", false)
     .order("created_at", { ascending: true })
     .limit(50);
@@ -393,7 +407,22 @@ async function summariseArticles(supabase) {
 
   for (const article of picked) {
     try {
-      const ctx = await fetchArticleContext(article.gdelt_url);
+      let publisherPageUrl = article.article_url || null;
+      let decoded = null;
+      if (!publisherPageUrl && article.gdelt_url?.includes("news.google.com")) {
+        decoded = await resolvePublisherArticleUrl(article.gdelt_url);
+        if (decoded.ok && decoded.url) publisherPageUrl = decoded.url;
+        else if (decoded && !decoded.ok) {
+          console.warn({
+            event: "GOOGLE_NEWS_URL_DECODE_FAILED",
+            articleId: article.id,
+            message: decoded.message,
+          });
+        }
+      }
+      if (!publisherPageUrl) publisherPageUrl = article.gdelt_url;
+
+      const ctx = await fetchArticleContext(publisherPageUrl);
       const result = await callClaude(article, ctx?.text);
       const upd = {
         tldr: result.tldr,
@@ -402,11 +431,29 @@ async function summariseArticles(supabase) {
         read_time_min: result.readTime,
         summarised: true,
       };
-      if (result.industryTags) upd.industry_tags = result.industryTags;
-      if (result.functionTags) upd.function_tags = result.functionTags;
-      if (ctx?.image) upd.image_url = ctx.image;
+      if (Array.isArray(result.industryTags) && result.industryTags.length > 0) {
+        upd.industry_tags = result.industryTags;
+      }
+      if (Array.isArray(result.functionTags) && result.functionTags.length > 0) {
+        upd.function_tags = result.functionTags;
+      }
+      if (decoded?.ok && decoded.url && !decoded.url.includes("news.google.com")) {
+        upd.article_url = decoded.url;
+      }
+      if (ctx?.image && !isGoogleNewsBoilerplateImage(ctx.image)) {
+        upd.image_url = ctx.image;
+      } else if (!article.image_url || isGoogleNewsBoilerplateImage(article.image_url)) {
+        upd.image_url = null;
+      }
       const { error: ue } = await supabase.from("articles").update(upd).eq("id", article.id);
-      if (!ue) {
+      if (ue) {
+        console.error({
+          event: "ARTICLE_UPDATE_FAILED",
+          articleId: article.id,
+          message: ue.message,
+          code: ue.code,
+        });
+      } else {
         await supabase.from("article_engagement").insert({ article_id: article.id }).select().maybeSingle();
         count++;
       }
@@ -429,27 +476,37 @@ async function summariseArticles(supabase) {
 //  ARTICLE CONTEXT — scrape og:image + text
 // ═══════════════════════════════════════════════
 
-async function fetchArticleContext(url) {
+const BROWSER_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
+async function fetchArticleContext(pageUrl) {
   try {
-    const res = await fetch(url, {
-      headers: { "User-Agent": "TIC-Pulse/3.2 (news aggregator)" },
-      signal: AbortSignal.timeout(8000),
+    const res = await fetch(pageUrl, {
+      headers: {
+        "User-Agent": BROWSER_UA,
+        Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+      signal: AbortSignal.timeout(12000),
       redirect: "follow",
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      console.warn({ event: "ARTICLE_FETCH_NON_OK", url: pageUrl.slice(0, 120), status: res.status });
+      return null;
+    }
     const html = await res.text();
 
-    // Extract og:image
     let image = null;
-    const ogImage = html.match(/<meta[^>]+property="og:image"[^>]+content="([^"]+)"/i)
-      || html.match(/<meta[^>]+content="([^"]+)"[^>]+property="og:image"/i);
-    if (ogImage?.[1]) {
-      const imgUrl = ogImage[1];
+    const imgRaw = extractOgImageFromHtml(html);
+    if (imgRaw) {
       try {
-        const u = new URL(imgUrl);
-        if (u.protocol === "https:" || u.protocol === "http:") image = imgUrl;
-      } catch {}
+        const u = new URL(imgRaw);
+        if (u.protocol === "https:" || u.protocol === "http:") image = imgRaw;
+      } catch {
+        image = null;
+      }
     }
+    if (image && isGoogleNewsBoilerplateImage(image)) image = null;
 
     // Extract text content (first 3000 chars of body text)
     const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);

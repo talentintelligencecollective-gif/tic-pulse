@@ -4,6 +4,7 @@ import { z } from "zod";
 export const ArticleFeedRowSchema = z.object({
   id: z.string().uuid(),
   gdelt_url: z.string(),
+  article_url: z.string().nullable().optional(),
   title: z.string(),
   source_name: z.string().nullable().optional(),
   source_domain: z.string().nullable().optional(),

@@ -7,11 +7,12 @@
 -- Core table storing GDELT-sourced articles with AI summaries
 CREATE TABLE IF NOT EXISTS articles (
   id           UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  gdelt_url    TEXT UNIQUE NOT NULL,                       -- dedupe key
+  gdelt_url    TEXT UNIQUE NOT NULL,                       -- dedupe key (often news.google.com RSS link)
+  article_url  TEXT,                                       -- resolved publisher URL when decoded from Google News
   title        TEXT NOT NULL,
   source_name  TEXT,                                       -- e.g. "Financial Times"
   source_domain TEXT,                                      -- e.g. "ft.com"
-  image_url    TEXT,                                       -- GDELT socialimage
+  image_url    TEXT,                                       -- og:image from publisher (not Google placeholder)
   category     TEXT,                                       -- AI-assigned category
   tldr         TEXT,                                       -- AI-generated summary
   tags         TEXT[] DEFAULT '{}',                        -- AI-generated hashtags
@@ -109,6 +110,7 @@ CREATE OR REPLACE VIEW articles_feed AS
 SELECT
   a.id,
   a.gdelt_url,
+  a.article_url,
   a.title,
   a.source_name,
   a.source_domain,

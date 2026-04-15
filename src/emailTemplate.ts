@@ -9,6 +9,8 @@
 //  - Web-safe font stacks
 // ═══════════════════════════════════════════════════════════════
 
+import { isGoogleNewsPlaceholderImageUrl } from "./utils/articleImage";
+
 export const NEWSLETTER_THEMES = {
   pulse: {
     id: "pulse", name: "TIC Pulse", description: "Default dark editorial",
@@ -91,8 +93,11 @@ function isColorDark(hex) {
 function renderArticle(article, i, t) {
   const catColor = CAT_COLORS[article.category] || t.accent;
   const tags = (article.tags || []).slice(0, 3).map((tag) => esc(tag)).join(" &nbsp;·&nbsp; ");
-  const articleUrl = esc(article.gdelt_url || "");
-  const imageUrl = article.image_url || "";
+  const articleUrl = esc(article.article_url || article.gdelt_url || "");
+  const rawImg = article.image_url || "";
+  const imageUrl = esc(
+    rawImg && !isGoogleNewsPlaceholderImageUrl(rawImg) ? rawImg : ""
+  );
 
   return `
   <!-- Article ${i + 1} -->

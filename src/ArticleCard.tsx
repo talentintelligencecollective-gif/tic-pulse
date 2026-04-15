@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
 import type { Article } from "./schemas/article";
+import { isGoogleNewsPlaceholderImageUrl } from "./utils/articleImage";
 import { HeartIcon, CommentIcon, ShareIcon, BookmarkIcon, ExternalIcon, ToneIndicator } from "./Icons";
 
 const CAT_COLORS = {
@@ -141,7 +142,11 @@ export default function ArticleCard({
 
   const color = CAT_COLORS[article.category] || "#00e5a0";
   const abbr = sourceAbbr(article.source_name);
-  const hasImage = article.image_url && !imgError;
+  const heroImageUrl =
+    article.image_url && !isGoogleNewsPlaceholderImageUrl(article.image_url)
+      ? article.image_url
+      : null;
+  const hasImage = Boolean(heroImageUrl) && !imgError;
   const [grad1, grad2] = CAT_GRADIENTS[article.category] || ["#111", "#1a1a1a"];
   const timeDisplay = formatRelativeTime(article.published_at || article.created_at);
 
@@ -265,9 +270,11 @@ export default function ArticleCard({
         <div style={{ position: "relative", paddingTop: "50%", overflow: "hidden" }}>
           <div style={{
             position: "absolute", inset: 0,
-            background: hasImage ? `url(${article.image_url}) center/cover` : `linear-gradient(135deg, ${grad1}, ${grad2})`,
+            background: hasImage ? `url(${heroImageUrl}) center/cover` : `linear-gradient(135deg, ${grad1}, ${grad2})`,
           }}>
-            {hasImage && <img src={article.image_url} alt="" style={{ display: "none" }} onError={() => setImgError(true)} />}
+            {hasImage && heroImageUrl && (
+              <img src={heroImageUrl} alt="" style={{ display: "none" }} onError={() => setImgError(true)} />
+            )}
             {!hasImage && (
               <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
                 <div style={{ fontSize: "40px", fontWeight: 800, color: `${color}15`, fontFamily: "Georgia, serif" }}>
@@ -291,7 +298,7 @@ export default function ArticleCard({
               >{tag}</span>
             ))}
             <span style={{ marginLeft: "auto" }}>
-              <a href={article.gdelt_url} target="_blank" rel="noopener noreferrer" style={{
+              <a href={article.article_url || article.gdelt_url} target="_blank" rel="noopener noreferrer" style={{
                 display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "11px", color: "#888", fontWeight: 500, transition: "color 0.2s", textDecoration: "none",
               }}
                 onMouseEnter={(e) => (e.currentTarget.style.color = "#00e5a0")}

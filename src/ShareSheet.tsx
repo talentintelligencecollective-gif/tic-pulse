@@ -1,9 +1,14 @@
 import { CopyIcon } from "./Icons";
+import { isGoogleNewsPlaceholderImageUrl } from "./utils/articleImage";
 
 export default function ShareSheet({ article, onClose, onToast }) {
   if (!article) return null;
 
-  const shareUrl = article.gdelt_url || article.url || "";
+  const shareUrl = article.article_url || article.gdelt_url || article.url || "";
+  const previewImageUrl =
+    article.image_url && !isGoogleNewsPlaceholderImageUrl(article.image_url)
+      ? article.image_url
+      : null;
   const shareText = `${article.title} — via TIC Pulse`;
 
   const actions = [
@@ -37,8 +42,8 @@ export default function ShareSheet({ article, onClose, onToast }) {
 
         {/* Article preview */}
         <div style={{ display: "flex", gap: "14px", padding: "14px", marginBottom: "20px", background: "rgba(255,255,255,0.04)", borderRadius: "16px", border: "1px solid #2a3348" }}>
-          {article.image_url && (
-            <div style={{ width: "56px", height: "56px", borderRadius: "12px", flexShrink: 0, backgroundImage: `url(${article.image_url})`, backgroundSize: "cover", backgroundPosition: "center", backgroundColor: "#1f2937" }} />
+          {previewImageUrl && (
+            <div style={{ width: "56px", height: "56px", borderRadius: "12px", flexShrink: 0, backgroundImage: `url(${previewImageUrl})`, backgroundSize: "cover", backgroundPosition: "center", backgroundColor: "#1f2937" }} />
           )}
           <div style={{ flex: 1, minWidth: 0 }}>
             <p style={{ fontSize: "14px", fontWeight: 600, color: "#eee", margin: 0, lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", fontFamily: "Georgia, serif" }}>{article.title}</p>

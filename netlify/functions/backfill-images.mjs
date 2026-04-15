@@ -1,11 +1,17 @@
 // ═══════════════════════════════════════════════════════════════
-//  TIC Pulse — Image Backfill (one-time use)
-//  Attempts to scrape og:image for articles missing images.
-//  Run via: curl https://your-site.netlify.app/.netlify/functions/backfill-images
+//  TIC Pulse — Image Backfill
+//  Scrapes og:image for articles missing images or stuck on Google
+//  News placeholder thumbnails. Run via:
+//  curl https://your-site.netlify.app/.netlify/functions/backfill-images
 //  Processes 50 articles per run to avoid Netlify timeout.
 // ═══════════════════════════════════════════════════════════════
 
 import { createClient } from "@supabase/supabase-js";
+import {
+  extractOgImageFromHtml,
+  isGoogleNewsBoilerplateImage,
+  resolvePublisherArticleUrl,
+} from "./lib/article-image.mjs";
 
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -24,44 +30,37 @@ function isValidImageUrl(url) {
   return true;
 }
 
-function decodeEntities(t) {
-  return t.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ").replace(/<[^>]+>/g, "");
-}
-
-function extractMeta(html, attr) {
-  const p1 = new RegExp(`<meta\\s+[^>]*${attr}[^>]*content=["']([^"']{10,500})["']`, "i");
-  const p2 = new RegExp(`<meta\\s+[^>]*content=["']([^"']{10,500})["'][^>]*${attr}`, "i");
-  const m = html.match(p1) || html.match(p2);
-  return m ? decodeEntities(m[1].trim()) : null;
-}
-
-async function scrapeImage(url) {
+async function scrapeImageFromPublisherUrl(pageUrl) {
   try {
-    if (url.includes("news.google.com")) return null;
-    const r = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; TIC-Pulse/1.0)", "Accept": "text/html" },
-      redirect: "follow", signal: AbortSignal.timeout(6000),
+    if (!pageUrl || pageUrl.includes("news.google.com")) return null;
+    const r = await fetch(pageUrl, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+      redirect: "follow",
+      signal: AbortSignal.timeout(12000),
     });
     if (!r.ok) return null;
     const html = await r.text();
 
-    const image = extractMeta(html, 'property="og:image"')
-      || extractMeta(html, 'name="twitter:image"')
-      || extractMeta(html, 'name="twitter:image:src"')
-      || extractMeta(html, 'property="og:image:url"')
-      || extractMeta(html, 'itemprop="image"');
+    const image = extractOgImageFromHtml(html);
+    if (!image || !isValidImageUrl(image) || isGoogleNewsBoilerplateImage(image)) return null;
 
-    if (!image || !isValidImageUrl(image)) return null;
-
-    // Ensure absolute URL
     if (!image.startsWith("http")) {
-      try { return new URL(image, url).href; }
-      catch { return null; }
+      try {
+        return new URL(image, pageUrl).href;
+      } catch {
+        return null;
+      }
     }
 
     return image;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 export default async function handler(req) {
@@ -71,12 +70,14 @@ export default async function handler(req) {
   try {
     const supabase = getSupabase();
 
-    // Get articles without images, most recent first
+    // Rows with no image or Google News CDN placeholder thumbnails
     const { data: articles, error } = await supabase
       .from("articles")
-      .select("id, gdelt_url, title")
-      .is("image_url", null)
+      .select("id, gdelt_url, article_url, title")
       .eq("summarised", true)
+      .or(
+        "image_url.is.null,image_url.ilike.%googleusercontent.com%,image_url.ilike.%ggpht.com%"
+      )
       .order("created_at", { ascending: false })
       .limit(BATCH_SIZE);
 
@@ -86,17 +87,33 @@ export default async function handler(req) {
         { status: 200, headers: { "Content-Type": "application/json" } });
     }
 
-    console.log(`Processing ${articles.length} articles without images...`);
+    console.log(`Processing ${articles.length} articles needing images...`);
     let found = 0;
     let failed = 0;
 
     for (const article of articles) {
-      const image = await scrapeImage(article.gdelt_url);
+      let targetUrl = article.article_url || null;
+      let resolvedFromDecode = null;
+      if (!targetUrl && article.gdelt_url?.includes("news.google.com")) {
+        const decoded = await resolvePublisherArticleUrl(article.gdelt_url);
+        if (decoded.ok && decoded.url) {
+          targetUrl = decoded.url;
+          resolvedFromDecode = decoded.url;
+        }
+      }
+      if (!targetUrl) targetUrl = article.gdelt_url;
+
+      if (!targetUrl || targetUrl.includes("news.google.com")) {
+        failed++;
+        await new Promise((r) => setTimeout(r, 200));
+        continue;
+      }
+
+      const image = await scrapeImageFromPublisherUrl(targetUrl);
       if (image) {
-        const { error: updateErr } = await supabase
-          .from("articles")
-          .update({ image_url: image })
-          .eq("id", article.id);
+        const row = { image_url: image };
+        if (resolvedFromDecode && !article.article_url) row.article_url = resolvedFromDecode;
+        const { error: updateErr } = await supabase.from("articles").update(row).eq("id", article.id);
         if (!updateErr) {
           found++;
           console.log(`✓ Found image for: ${article.title.slice(0, 50)}`);
@@ -105,8 +122,7 @@ export default async function handler(req) {
         failed++;
       }
 
-      // Small delay to avoid hammering external servers
-      await new Promise(r => setTimeout(r, 200));
+      await new Promise((r) => setTimeout(r, 200));
     }
 
     const elapsed = ((Date.now() - start) / 1000).toFixed(1);
